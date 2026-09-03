@@ -169,14 +169,16 @@ def check_text_violation(text: str) -> Tuple[ViolationType, Optional[str]]:
     if not text:
         return ViolationType.NONE, None
 
-    # Подготавливаем варианты текста для анализа:
     # Вариант 1: Текст после нормализации транслита и leetspeak
     norm = transliterate_and_normalize(text)
 
     # Вариант 2: Текст после раскрытия маскировочных знаков препинания и межбуквенных пробелов
     condensed = remove_spacing_and_symbols_tricks(norm)
 
-    variants = [condensed, norm]
+    # Вариант 3: Снятие разделителей до транслитерации (например, b.l.y.a -> blya -> бля)
+    trans_condensed = transliterate_and_normalize(remove_spacing_and_symbols_tricks(text))
+
+    variants = [condensed, trans_condensed, norm]
 
     # 1. Проверка на оскорбления
     for variant in variants:

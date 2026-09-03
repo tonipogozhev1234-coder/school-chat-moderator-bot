@@ -63,6 +63,9 @@ class Config:
         default_factory=lambda: os.getenv("DELETE_VIOLATING_MESSAGES", "True").lower() in ("true", "1", "yes")
     )
     admin_ids: List[int] = field(default_factory=list)
+    report_user_id: int = field(
+        default_factory=lambda: int(os.getenv("REPORT_USER_ID", "5325601154"))
+    )
     db_path: Path = field(default_factory=lambda: BASE_DIR / "chat_bot.db")
 
     def __post_init__(self):

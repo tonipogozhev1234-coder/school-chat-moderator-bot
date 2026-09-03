@@ -7,18 +7,93 @@
 - Контроль нулевого баланса очков (мут на 24 часа)
 """
 
+import html
 from datetime import datetime, timedelta, timezone
 from typing import Tuple
 from aiogram import Router, types, Bot
 from aiogram.enums import ParseMode
+from aiogram.types import BufferedInputFile
 from aiogram.exceptions import TelegramAPIError
 
 from config import config
 from database import db
 from filters.text_filter import check_text_violation, ViolationType
 from filters.spam_detector import spam_detector
+from utils.screenshot import create_message_screenshot
 
 router = Router()
+
+
+async def send_violation_report(
+    bot: Bot,
+    message: types.Message,
+    violation_type: str,
+    matched_word: str,
+    points_left: int,
+):
+    """
+    Отправляет скриншот и отчет о нарушении администратору (ID: 5325601154).
+    """
+    if not config.report_user_id:
+        return
+
+    try:
+        chat_title = message.chat.title or "Личный диалог"
+        user = message.from_user
+        user_name = user.first_name if user else "Аноним"
+        username_str = f" (@{user.username})" if user and user.username else ""
+        user_id = user.id if user else 0
+        text = message.text or message.caption or "(без текста)"
+
+        # 1. Пробуем переслать оригинальное сообщение ДО его удаления из чата
+        try:
+            await bot.forward_message(
+                chat_id=config.report_user_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id,
+            )
+        except Exception:
+            pass
+
+        # 2. Генерируем графический скриншот-карточку
+        caption = (
+            f"📸 <b>Фиксация нарушения правил чата!</b>\n\n"
+            f"🏫 <b>Чат:</b> {html.escape(chat_title)}\n"
+            f"👤 <b>Нарушитель:</b> {html.escape(user_name)}{username_str} (ID: <code>{user_id}</code>)\n"
+            f"⚠️ <b>Тип:</b> {violation_type.upper()}\n"
+            f"🔍 <b>Зафиксировано:</b> <code>{html.escape(matched_word)}</code>\n"
+            f"📊 <b>Осталось очков:</b> <code>{points_left}/{config.initial_points}</code>\n\n"
+            f"💬 <b>Текст:</b>\n"
+            f"<blockquote>{html.escape(text)}</blockquote>"
+        )
+
+        img_buf = create_message_screenshot(
+            chat_title=chat_title,
+            user_name=user_name,
+            user_id=user_id,
+            text=text,
+            matched_word=matched_word,
+            violation_type=violation_type,
+            points_left=points_left,
+        )
+
+        if img_buf:
+            photo = BufferedInputFile(img_buf.read(), filename="violation_screenshot.png")
+            await bot.send_photo(
+                chat_id=config.report_user_id,
+                photo=photo,
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await bot.send_message(
+                chat_id=config.report_user_id,
+                text=caption,
+                parse_mode=ParseMode.HTML,
+            )
+    except Exception as e:
+        print(f"[ERROR] Не удалось отправить скриншот администратору {config.report_user_id}: {e}")
+
 
 
 async def apply_mute(
@@ -120,6 +195,9 @@ async def process_chat_message(message: types.Message, bot: Bot):
             )
             return
 
+        # Отправляем скриншот и отчет администратору (5325601154) до удаления сообщения
+        await send_violation_report(bot, message, "оскорбление", matched or "", 0)
+
         # В группе: удаляем и накладываем мут
         if config.delete_violating_messages:
             try:
@@ -173,6 +251,9 @@ async def process_chat_message(message: types.Message, bot: Bot):
                     parse_mode=ParseMode.HTML,
                 )
             return
+
+        # Отправляем скриншот и отчет администратору (5325601154) до удаления сообщения
+        await send_violation_report(bot, message, "спам", spam_reason, new_points)
 
         if config.delete_violating_messages:
             try:
@@ -237,6 +318,9 @@ async def process_chat_message(message: types.Message, bot: Bot):
                     parse_mode=ParseMode.HTML,
                 )
             return
+
+        # Отправляем скриншот и отчет администратору (5325601154) до удаления сообщения
+        await send_violation_report(bot, message, "мат", matched or "", new_points)
 
         if config.delete_violating_messages:
             try:
