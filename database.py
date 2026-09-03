@@ -249,14 +249,15 @@ class Database:
 
             if clean_count >= reward_step:
                 new_points = current_points + reward_points
+                rem_clean = clean_count - reward_step
                 cursor.execute(
                     """UPDATE users 
-                       SET points = ?, clean_messages_count = 0, updated_at = ? 
+                       SET points = ?, clean_messages_count = ?, updated_at = ? 
                        WHERE chat_id = ? AND user_id = ?""",
-                    (new_points, now_str, chat_id, user_id),
+                    (new_points, rem_clean, now_str, chat_id, user_id),
                 )
                 conn.commit()
-                return True, new_points, 0
+                return True, new_points, rem_clean
 
             return False, current_points, clean_count
 

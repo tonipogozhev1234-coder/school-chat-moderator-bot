@@ -198,7 +198,6 @@ async def process_chat_message(message: types.Message, bot: Bot):
             details=matched or "",
             points_deducted=0,
         )
-        await db.reset_clean_messages(chat_id, user_id)
 
         if is_private:
             await message.reply(
@@ -248,7 +247,6 @@ async def process_chat_message(message: types.Message, bot: Bot):
             details=spam_reason,
             points_deducted=config.spam_penalty,
         )
-        await db.reset_clean_messages(chat_id, user_id)
 
         if is_private:
             if new_points <= 0:
@@ -315,7 +313,6 @@ async def process_chat_message(message: types.Message, bot: Bot):
             details=matched or "",
             points_deducted=config.mat_penalty,
         )
-        await db.reset_clean_messages(chat_id, user_id)
 
         if is_private:
             if new_points <= 0:
@@ -382,7 +379,7 @@ async def process_chat_message(message: types.Message, bot: Bot):
         )
         if is_rewarded:
             await message.reply(
-                f"🎉 <b>{user_name}</b>, за <b>{config.clean_messages_reward_step} вежливых сообщений без мата подряд</b> "
+                f"🎉 <b>{user_name}</b>, за каждые <b>{config.clean_messages_reward_step} сообщений без мата</b> "
                 f"вам начислен <b>+{config.clean_messages_reward_points} балл</b>!\n"
                 f"📊 Текущий баланс: <b>{new_points} очков</b>. Так держать!",
                 parse_mode=ParseMode.HTML,

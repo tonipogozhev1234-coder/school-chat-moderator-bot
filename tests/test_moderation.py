@@ -189,11 +189,12 @@ def test_database():
             assert pts == 11, f"Очки должны увеличиться до 11, получено: {pts}"
             assert count == 0, "Счетчик должен сброситься в 0"
 
-            # Проверка сброса серии при нарушении
+            # Проверка, что чистые сообщения продолжают накапливаться не подряд
             await test_db.record_clean_message(chat_id, user_id, reward_step=25)
-            await test_db.reset_clean_messages(chat_id, user_id)
+            # Нарушение (запись в журнал) не сбрасывает счетчик чистых сообщений
+            await test_db.record_violation(chat_id, user_id, "mat", "бля", 1)
             user_check = await test_db.get_or_create_user(chat_id, user_id, "ivan_test", "Иван")
-            assert user_check["clean_messages_count"] == 0, "Счетчик чистых сообщений должен быть 0 после сброса"
+            assert user_check["clean_messages_count"] == 1, "Счетчик чистых сообщений не должен сбрасываться при нарушении!"
 
         asyncio.run(run_db_tests())
     print("✅ Тест базы данных успешно пройден!")

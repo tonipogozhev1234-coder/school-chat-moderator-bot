@@ -53,7 +53,7 @@ async def cmd_rules(message: types.Message):
         f"3️⃣ <b>Спам и флуд запрещены</b> — штраф <b>-{config.spam_penalty} очко</b>.\n"
         f"4️⃣ <b>Оскорбления участников</b> — немедленный <b>МУТ НА {config.insult_mute_hours} ЧАСА</b>!\n"
         f"5️⃣ Если баланс очков падает до <b>0</b> — автоматический <b>МУТ НА {config.zero_points_mute_hours} {zero_word.upper()}</b>, после чего баланс восстанавливается до {config.initial_points}.\n"
-        f"6️⃣ 🎁 <b>Бонус вежливости:</b> за каждые <b>{config.clean_messages_reward_step} сообщений подряд без мата</b> начисляется <b>+{config.clean_messages_reward_points} балл</b> к балансу!\n\n"
+        f"6️⃣ 🎁 <b>Бонус вежливости:</b> за каждые <b>{config.clean_messages_reward_step} сообщений без мата</b> начисляется <b>+{config.clean_messages_reward_points} балл</b> к балансу!\n\n"
         "💡 <i>Проверить свои очки:</i> <code>/score</code>\n"
         "🏆 <i>Таблица очков участников:</i> <code>/top</code>"
     )
@@ -85,7 +85,7 @@ async def cmd_score(message: types.Message):
     reply_text = (
         f"📊 <b>Статистика участника {user.first_name}:</b>\n\n"
         f"{status_icon} Текущие очки: <b>{points}</b>\n"
-        f"📈 Сообщений без мата подряд: <b>{clean_count}/{config.clean_messages_reward_step}</b> (до +{config.clean_messages_reward_points} балла)\n"
+        f"📈 Сообщений без мата: <b>{clean_count}/{config.clean_messages_reward_step}</b> (до +{config.clean_messages_reward_points} балла)\n"
         f"⚠️ Нарушений зафиксировано: <b>{warnings}</b>\n"
         f"🤐 Количество мутов: <b>{mutes}</b>"
     )
