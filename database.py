@@ -1,0 +1,232 @@
+"""
+Модуль работы с базой данных SQLite для хранения очков участников и истории нарушений.
+"""
+
+import sqlite3
+import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+from contextlib import contextmanager
+
+from config import config
+
+
+class Database:
+    def __init__(self, db_path: Optional[Path] = None):
+        self.db_path = db_path or config.db_path
+
+    @contextmanager
+    def _get_connection(self):
+        """Контекстный менеджер соединения SQLite с гарантированным закрытием."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _init_db_sync(self) -> None:
+        """Синхронная инициализация схемы БД."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # Таблица пользователей и очков
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    username TEXT,
+                    first_name TEXT,
+                    points INTEGER DEFAULT 10,
+                    warnings_count INTEGER DEFAULT 0,
+                    mutes_count INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (chat_id, user_id)
+                )
+            """)
+            # Таблица журнала нарушений
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS violations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    violation_type TEXT NOT NULL,
+                    details TEXT,
+                    points_deducted INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+
+    async def init_db(self) -> None:
+        """Асинхронный вызов инициализации БД."""
+        await asyncio.to_thread(self._init_db_sync)
+
+    def _get_or_create_user_sync(
+        self, chat_id: int, user_id: int, username: Optional[str], first_name: Optional[str], default_points: int = 10
+    ) -> Dict[str, Any]:
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM users WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                # Обновляем имя и юзернейм если они изменились
+                cursor.execute(
+                    """UPDATE users 
+                       SET username = ?, first_name = ?, updated_at = ? 
+                       WHERE chat_id = ? AND user_id = ?""",
+                    (username, first_name, now_str, chat_id, user_id),
+                )
+                conn.commit()
+                cursor.execute(
+                    "SELECT * FROM users WHERE chat_id = ? AND user_id = ?",
+                    (chat_id, user_id),
+                )
+                return dict(cursor.fetchone())
+
+            # Создаем нового участника со стартовыми очками
+            cursor.execute(
+                """INSERT INTO users 
+                   (chat_id, user_id, username, first_name, points, warnings_count, mutes_count, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)""",
+                (chat_id, user_id, username, first_name, default_points, now_str, now_str),
+            )
+            conn.commit()
+            cursor.execute(
+                "SELECT * FROM users WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            return dict(cursor.fetchone())
+
+    async def get_or_create_user(
+        self, chat_id: int, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        return await asyncio.to_thread(
+            self._get_or_create_user_sync,
+            chat_id,
+            user_id,
+            username,
+            first_name,
+            config.initial_points,
+        )
+
+    def _deduct_points_sync(self, chat_id: int, user_id: int, amount: int) -> int:
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE users 
+                   SET points = points - ?, warnings_count = warnings_count + 1, updated_at = ? 
+                   WHERE chat_id = ? AND user_id = ?""",
+                (amount, now_str, chat_id, user_id),
+            )
+            conn.commit()
+            cursor.execute(
+                "SELECT points FROM users WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            row = cursor.fetchone()
+            return row["points"] if row else 0
+
+    async def deduct_points(self, chat_id: int, user_id: int, amount: int = 1) -> int:
+        return await asyncio.to_thread(self._deduct_points_sync, chat_id, user_id, amount)
+
+    def _add_points_sync(self, chat_id: int, user_id: int, amount: int) -> int:
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE users 
+                   SET points = points + ?, updated_at = ? 
+                   WHERE chat_id = ? AND user_id = ?""",
+                (amount, now_str, chat_id, user_id),
+            )
+            conn.commit()
+            cursor.execute(
+                "SELECT points FROM users WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            row = cursor.fetchone()
+            return row["points"] if row else 0
+
+    async def add_points(self, chat_id: int, user_id: int, amount: int) -> int:
+        return await asyncio.to_thread(self._add_points_sync, chat_id, user_id, amount)
+
+    def _set_points_sync(self, chat_id: int, user_id: int, points: int) -> int:
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE users 
+                   SET points = ?, updated_at = ? 
+                   WHERE chat_id = ? AND user_id = ?""",
+                (points, now_str, chat_id, user_id),
+            )
+            conn.commit()
+            return points
+
+    async def set_points(self, chat_id: int, user_id: int, points: int) -> int:
+        return await asyncio.to_thread(self._set_points_sync, chat_id, user_id, points)
+
+    def _reset_points_sync(self, chat_id: int, user_id: int, default_points: int = 10) -> int:
+        return self._set_points_sync(chat_id, user_id, default_points)
+
+    async def reset_points(self, chat_id: int, user_id: int) -> int:
+        return await asyncio.to_thread(self._reset_points_sync, chat_id, user_id, config.initial_points)
+
+    def _record_violation_sync(
+        self, chat_id: int, user_id: int, violation_type: str, details: str, points_deducted: int
+    ) -> None:
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO violations 
+                   (chat_id, user_id, violation_type, details, points_deducted, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (chat_id, user_id, violation_type, details, points_deducted, now_str),
+            )
+            conn.commit()
+
+    async def record_violation(
+        self, chat_id: int, user_id: int, violation_type: str, details: str = "", points_deducted: int = 0
+    ) -> None:
+        await asyncio.to_thread(
+            self._record_violation_sync, chat_id, user_id, violation_type, details, points_deducted
+        )
+
+    def _record_mute_sync(self, chat_id: int, user_id: int) -> None:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET mutes_count = mutes_count + 1 WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            conn.commit()
+
+    async def record_mute(self, chat_id: int, user_id: int) -> None:
+        await asyncio.to_thread(self._record_mute_sync, chat_id, user_id)
+
+    def _get_chat_leaderboard_sync(self, chat_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT user_id, username, first_name, points, warnings_count, mutes_count
+                   FROM users
+                   WHERE chat_id = ?
+                   ORDER BY points DESC, warnings_count ASC
+                   LIMIT ?""",
+                (chat_id, limit),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+
+    async def get_chat_leaderboard(self, chat_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._get_chat_leaderboard_sync, chat_id, limit)
+
+
+db = Database()
