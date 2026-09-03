@@ -66,7 +66,7 @@ async def apply_penalty_by_username_or_id(
     await message.reply(
         f"📉 <b>Списано -{amount} очко с {target_username}!</b>\n\n"
         f"👤 Участник: <b>{target_name}</b> (ID: <code>{target_user_id}</code>)\n"
-        f"📊 Текущий баланс: <b>{new_points}/{config.initial_points} очков</b>\n"
+        f"📊 Текущий баланс: <b>{new_points} очков</b>\n"
         f"📝 Причина: <i>{reason}</i>{mute_note}",
         parse_mode=ParseMode.HTML,
     )
@@ -86,7 +86,7 @@ async def apply_penalty_by_username_or_id(
                     chat_id,
                     f"⚠️ <b>Администратор оштрафовал {target_username} на -{amount} очко!</b>\n"
                     f"Причина: <i>{reason}</i>\n"
-                    f"📊 Осталось очков: <b>{new_points}/{config.initial_points}</b>.",
+                    f"📊 Осталось очков: <b>{new_points}</b>.",
                     parse_mode=ParseMode.HTML,
                 )
         except Exception:
@@ -193,7 +193,7 @@ async def handle_direct_username_penalty(message: types.Message, bot: Bot):
             f"✅ <b>Пополнение баланса!</b>\n"
             f"👤 Участник: <b>{target_name}</b> ({target_username})\n"
             f"📈 Начислено: <b>+{amount} очков</b>\n"
-            f"📊 Новый баланс: <b>{new_points}/{config.initial_points} очков</b>",
+            f"📊 Новый баланс: <b>{new_points} очков</b>",
             parse_mode=ParseMode.HTML,
         )
 
@@ -202,7 +202,7 @@ async def handle_direct_username_penalty(message: types.Message, bot: Bot):
                 await bot.send_message(
                     chat_id,
                     f"🎉 <b>Администратор пополнил баланс участника {target_username} на +{amount} очк.!</b>\n"
-                    f"📊 Текущий баланс: <b>{new_points}/{config.initial_points}</b>.",
+                    f"📊 Текущий баланс: <b>{new_points}</b>.",
                     parse_mode=ParseMode.HTML,
                 )
             except Exception:
@@ -339,7 +339,7 @@ async def cmd_addpoints(message: types.Message, bot: Bot):
         f"✅ <b>Баланс пополнен!</b>\n"
         f"👤 Участник: <b>{target_name}</b>{target_username}\n"
         f"📈 Начислено: <b>+{amount} очков</b>\n"
-        f"📊 Текущий баланс: <b>{new_points}/{config.initial_points} очков</b>.",
+        f"📊 Текущий баланс: <b>{new_points} очков</b>.",
         parse_mode=ParseMode.HTML,
     )
 
@@ -348,7 +348,7 @@ async def cmd_addpoints(message: types.Message, bot: Bot):
             await bot.send_message(
                 target_chat_id,
                 f"🎉 <b>Администратор пополнил баланс участника {target_name}{target_username} на +{amount} очк.!</b>\n"
-                f"📊 Текущий баланс: <b>{new_points}/{config.initial_points}</b>.",
+                f"📊 Текущий баланс: <b>{new_points}</b>.",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:

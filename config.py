@@ -68,18 +68,22 @@ class Config:
     clean_messages_reward_points: int = field(
         default_factory=lambda: int(os.getenv("CLEAN_MESSAGES_REWARD_POINTS", "1"))
     )
-    admin_ids: List[int] = field(default_factory=list)
+    admin_ids: List[int] = field(default_factory=lambda: [1287790358])
     report_user_id: int = field(
         default_factory=lambda: int(os.getenv("REPORT_USER_ID", "5325601154"))
     )
     db_path: Path = field(default_factory=lambda: BASE_DIR / "chat_bot.db")
 
     def __post_init__(self):
+        default_admins = [1287790358]
         raw_admins = os.getenv("ADMIN_IDS", "").strip()
         if raw_admins:
-            self.admin_ids = [
+            custom_admins = [
                 int(x.strip()) for x in raw_admins.split(",") if x.strip().isdigit()
             ]
+            self.admin_ids = list(set(default_admins + custom_admins))
+        else:
+            self.admin_ids = default_admins
 
 
 config = Config()

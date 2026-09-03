@@ -84,7 +84,7 @@ async def cmd_score(message: types.Message):
 
     reply_text = (
         f"📊 <b>Статистика участника {user.first_name}:</b>\n\n"
-        f"{status_icon} Текущие очки: <b>{points}/{config.initial_points}</b>\n"
+        f"{status_icon} Текущие очки: <b>{points}</b>\n"
         f"📈 Сообщений без мата подряд: <b>{clean_count}/{config.clean_messages_reward_step}</b> (до +{config.clean_messages_reward_points} балла)\n"
         f"⚠️ Нарушений зафиксировано: <b>{warnings}</b>\n"
         f"🤐 Количество мутов: <b>{mutes}</b>"

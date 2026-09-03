@@ -32,9 +32,16 @@ async def send_violation_report(
     points_left: int,
 ):
     """
-    Отправляет скриншот и отчет о нарушении администратору (ID: 5325601154).
+    Отправляет скриншот и отчет о нарушении всем администраторам (владельцу и доверенным админам).
     """
-    if not config.report_user_id:
+    target_admin_ids = set()
+    if config.report_user_id:
+        target_admin_ids.add(config.report_user_id)
+    for aid in config.admin_ids:
+        if aid:
+            target_admin_ids.add(aid)
+
+    if not target_admin_ids:
         return
 
     try:
@@ -45,24 +52,14 @@ async def send_violation_report(
         user_id = user.id if user else 0
         text = message.text or message.caption or "(без текста)"
 
-        # 1. Пробуем переслать оригинальное сообщение ДО его удаления из чата
-        try:
-            await bot.forward_message(
-                chat_id=config.report_user_id,
-                from_chat_id=message.chat.id,
-                message_id=message.message_id,
-            )
-        except Exception:
-            pass
-
-        # 2. Генерируем графический скриншот-карточку
+        # 1. Генерируем графический скриншот-карточку
         caption = (
             f"📸 <b>Фиксация нарушения правил чата!</b>\n\n"
             f"🏫 <b>Чат:</b> {html.escape(chat_title)}\n"
             f"👤 <b>Нарушитель:</b> {html.escape(user_name)}{username_str} (ID: <code>{user_id}</code>)\n"
             f"⚠️ <b>Тип:</b> {violation_type.upper()}\n"
             f"🔍 <b>Зафиксировано:</b> <code>{html.escape(matched_word)}</code>\n"
-            f"📊 <b>Осталось очков:</b> <code>{points_left}/{config.initial_points}</code>\n\n"
+            f"📊 <b>Осталось очков:</b> <code>{points_left}</code>\n\n"
             f"💬 <b>Текст:</b>\n"
             f"<blockquote>{html.escape(text)}</blockquote>"
         )
@@ -76,23 +73,38 @@ async def send_violation_report(
             violation_type=violation_type,
             points_left=points_left,
         )
+        photo_bytes = img_buf.read() if img_buf else None
 
-        if img_buf:
-            photo = BufferedInputFile(img_buf.read(), filename="violation_screenshot.png")
-            await bot.send_photo(
-                chat_id=config.report_user_id,
-                photo=photo,
-                caption=caption,
-                parse_mode=ParseMode.HTML,
-            )
-        else:
-            await bot.send_message(
-                chat_id=config.report_user_id,
-                text=caption,
-                parse_mode=ParseMode.HTML,
-            )
+        # 2. Рассылаем каждому администратору
+        for admin_id in target_admin_ids:
+            try:
+                await bot.forward_message(
+                    chat_id=admin_id,
+                    from_chat_id=message.chat.id,
+                    message_id=message.message_id,
+                )
+            except Exception:
+                pass
+
+            try:
+                if photo_bytes:
+                    photo = BufferedInputFile(photo_bytes, filename="violation_screenshot.png")
+                    await bot.send_photo(
+                        chat_id=admin_id,
+                        photo=photo,
+                        caption=caption,
+                        parse_mode=ParseMode.HTML,
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=admin_id,
+                        text=caption,
+                        parse_mode=ParseMode.HTML,
+                    )
+            except Exception as e:
+                print(f"[ERROR] Не удалось отправить скриншот администратору {admin_id}: {e}")
     except Exception as e:
-        print(f"[ERROR] Не удалось отправить скриншот администратору {config.report_user_id}: {e}")
+        print(f"[ERROR] Ошибка генерации отчета о нарушении: {e}")
 
 
 
@@ -242,19 +254,19 @@ async def process_chat_message(message: types.Message, bot: Bot):
             if new_points <= 0:
                 await db.reset_points(chat_id, user_id)
                 await message.reply(
-                    f"🚨 <b>{user_name}</b>, вы исчерпали все очки (0/{config.initial_points}) за спам!\n"
+                    f"🚨 <b>{user_name}</b>, вы исчерпали все очки (0) за спам!\n"
                     f"В группе вы бы отправились в мут на <b>{config.zero_points_mute_hours} часа</b>. Очки восстановлены до {config.initial_points}.",
                     parse_mode=ParseMode.HTML,
                 )
             else:
                 await message.reply(
                     f"⚠️ <b>{user_name}</b>, спам запрещён ({spam_reason})!\n"
-                    f"Штраф: <b>-{config.spam_penalty} очко</b>. Осталось очков: <b>{new_points}/{config.initial_points}</b>.",
+                    f"Штраф: <b>-{config.spam_penalty} очко</b>. Осталось очков: <b>{new_points}</b>.",
                     parse_mode=ParseMode.HTML,
                 )
             return
 
-        # Отправляем скриншот и отчет администратору (5325601154) до удаления сообщения
+        # Отправляем скриншот и отчет администраторам до удаления сообщения
         await send_violation_report(bot, message, "спам", spam_reason, new_points)
 
         if config.delete_violating_messages:
@@ -281,14 +293,14 @@ async def process_chat_message(message: types.Message, bot: Bot):
                 else ""
             )
             await message.answer(
-                f"🚨 <b>{user_name}</b> исчерпал все очки (0/{config.initial_points}) и отправлен в мут на <b>{config.zero_points_mute_hours} {zero_word}</b> за постоянный спам ({spam_reason})!{admin_note}\n"
+                f"🚨 <b>{user_name}</b> исчерпал все очки (0) и отправлен в мут на <b>{config.zero_points_mute_hours} {zero_word}</b> за постоянный спам ({spam_reason})!{admin_note}\n"
                 f"Очки восстановлены до {config.initial_points}.",
                 parse_mode=ParseMode.HTML,
             )
         else:
             await message.answer(
                 f"⚠️ <b>{user_name}</b>, спам запрещён ({spam_reason})!\n"
-                f"Штраф: <b>-{config.spam_penalty} очко</b>. Осталось очков: <b>{new_points}/{config.initial_points}</b>.",
+                f"Штраф: <b>-{config.spam_penalty} очко</b>. Осталось очков: <b>{new_points}</b>.",
                 parse_mode=ParseMode.HTML,
             )
         return
@@ -309,20 +321,20 @@ async def process_chat_message(message: types.Message, bot: Bot):
             if new_points <= 0:
                 await db.reset_points(chat_id, user_id)
                 await message.reply(
-                    f"🚨 <b>{user_name}</b>, вы исчерпали все очки (0/{config.initial_points})!\n"
+                    f"🚨 <b>{user_name}</b>, вы исчерпали все очки (0)!\n"
                     f"В группе вы бы отправились в мут на <b>{config.zero_points_mute_hours} часа</b>. Очки восстановлены до {config.initial_points}.",
                     parse_mode=ParseMode.HTML,
                 )
             else:
                 await message.reply(
                     f"⚠️ <b>{user_name}</b>, за мат штраф <b>-{config.mat_penalty} очко</b>!\n"
-                    f"Осталось очков: <b>{new_points}/{config.initial_points}</b>.\n"
+                    f"Осталось очков: <b>{new_points}</b>.\n"
                     "💡 <i>(В личке мут не применяется. Добавьте бота в группу класса и дайте права Администратора)</i>",
                     parse_mode=ParseMode.HTML,
                 )
             return
 
-        # Отправляем скриншот и отчет администратору (5325601154) до удаления сообщения
+        # Отправляем скриншот и отчет администраторам до удаления сообщения
         await send_violation_report(bot, message, "мат", matched or "", new_points)
 
         if config.delete_violating_messages:
@@ -348,14 +360,14 @@ async def process_chat_message(message: types.Message, bot: Bot):
                 else ""
             )
             await message.answer(
-                f"🚨 <b>{user_name}</b> исчерпал все очки (0/{config.initial_points}) и отправлен в мут на <b>{config.zero_points_mute_hours} {zero_word}</b> за нецензурную брань!{admin_note}\n"
+                f"🚨 <b>{user_name}</b> исчерпал все очки (0) и отправлен в мут на <b>{config.zero_points_mute_hours} {zero_word}</b> за нецензурную брань!{admin_note}\n"
                 f"Очки восстановлены до {config.initial_points}.",
                 parse_mode=ParseMode.HTML,
             )
         else:
             await message.answer(
                 f"⚠️ <b>{user_name}</b>, не выражайся! В чате действует цензура.\n"
-                f"Штраф: <b>-{config.mat_penalty} очко</b>. Осталось очков: <b>{new_points}/{config.initial_points}</b>.",
+                f"Штраф: <b>-{config.mat_penalty} очко</b>. Осталось очков: <b>{new_points}</b>.",
                 parse_mode=ParseMode.HTML,
             )
         return
@@ -372,6 +384,6 @@ async def process_chat_message(message: types.Message, bot: Bot):
             await message.reply(
                 f"🎉 <b>{user_name}</b>, за <b>{config.clean_messages_reward_step} вежливых сообщений без мата подряд</b> "
                 f"вам начислен <b>+{config.clean_messages_reward_points} балл</b>!\n"
-                f"📊 Текущий баланс: <b>{new_points}/{config.initial_points} очков</b>. Так держать!",
+                f"📊 Текущий баланс: <b>{new_points} очков</b>. Так держать!",
                 parse_mode=ParseMode.HTML,
             )

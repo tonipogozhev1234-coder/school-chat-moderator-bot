@@ -197,7 +197,7 @@ def create_message_screenshot(
         # Строка информации о нарушителе и балансе очков
         draw.text(
             (f_box_x1 + 16 * scale, f_box_y1 + 50 * scale),
-            f"ID: {user_id}  •  Штраф применен  •  Осталось очков: {points_left}/10",
+            f"ID: {user_id}  •  Штраф применен  •  Осталось очков: {points_left}",
             fill=(200, 205, 215),
             font=f_small,
         )
