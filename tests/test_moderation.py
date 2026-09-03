@@ -158,6 +158,12 @@ def test_database():
             points = await test_db.reset_points(chat_id, user_id)
             assert points == 10
 
+            # Проверка поиска по юзернейму
+            found = await test_db.get_user_by_username("@ivan_test")
+            assert found is not None and found["user_id"] == 42, "Поиск по @username не сработал"
+            found_no_at = await test_db.get_user_by_username("ivan_test")
+            assert found_no_at is not None and found_no_at["user_id"] == 42, "Поиск по username без @ не сработал"
+
             # Проверка виртуального мута (для админов и обычных участников)
             is_muted, rem = await test_db.is_user_muted(chat_id, user_id)
             assert not is_muted, "Пользователь не должен быть в муте изначально"

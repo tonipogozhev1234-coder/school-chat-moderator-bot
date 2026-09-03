@@ -1,17 +1,32 @@
 """
-Генерация графического скриншота-карточки нарушения для отправки администратору.
+Генерация реалистичного графического скриншота сообщения в стиле Telegram для отправки администратору.
 """
 
 import io
 import textwrap
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
 try:
     from PIL import Image, ImageDraw, ImageFont
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
+
+# Палитра аватаров Telegram
+AVATAR_COLORS = [
+    (231, 76, 60),    # Красный
+    (230, 126, 34),   # Оранжевый
+    (155, 89, 182),   # Фиолетовый
+    (46, 204, 113),   # Зеленый
+    (52, 152, 219),   # Синий
+    (26, 188, 156),   # Бирюзовый
+    (243, 104, 224),  # Розовый
+]
+
+
+def _get_avatar_color(user_id: int) -> Tuple[int, int, int]:
+    return AVATAR_COLORS[abs(user_id) % len(AVATAR_COLORS)]
 
 
 def create_message_screenshot(
@@ -24,100 +39,177 @@ def create_message_screenshot(
     points_left: int,
 ) -> Optional[io.BytesIO]:
     """
-    Создает графический скриншот-карточку нарушения в стиле Telegram.
-    Возвращает io.BytesIO с изображением PNG или None, если PIL недоступен.
+    Генерирует высококачественный, реалистичный скриншот сообщения в стиле тёмной темы Telegram.
+    Использует supersampling (2x масштаб с последующим сглаживанием) для идеальной чёткости.
     """
     if not HAS_PIL:
         return None
 
     try:
-        width = 650
-        # Обертка строк для текста сообщения
-        wrapped_lines = textwrap.wrap(text, width=45) if text else ["(пустое сообщение)"]
-        line_height = 24
-        text_block_height = len(wrapped_lines) * line_height
+        scale = 2  # 2x supersampling для чётких шрифтов и скруглений
+        base_width = 620
+        W = base_width * scale
 
-        # Вычисляем общую высоту карточки
-        card_height = 180 + text_block_height + 90
-        img = Image.new("RGB", (width, card_height), color=(14, 22, 33))  # Фон Telegram Dark
+        # Перенос строк сообщения
+        wrap_width = 38
+        lines = textwrap.wrap(text, width=wrap_width) if text else ["(пустое сообщение)"]
+        if len(lines) > 20:
+            lines = lines[:20] + ["... (сообщение обрезано)"]
+
+        line_h = 24 * scale
+        text_h = len(lines) * line_h
+
+        # Расчет высоты элементов
+        header_h = 64 * scale
+        bubble_top = header_h + 20 * scale
+        bubble_h = (45 * scale) + text_h + (25 * scale)
+        footer_top = bubble_top + bubble_h + (20 * scale)
+        footer_h = 80 * scale
+        total_h = footer_top + footer_h + (20 * scale)
+
+        img = Image.new("RGB", (W, total_h), color=(14, 22, 33))  # Фон Telegram Dark
         draw = ImageDraw.Draw(img)
 
-        # Подбор шрифтов с безопасным fallback
-        font_title = None
-        font_body = None
-        font_small = None
-
+        # Подбор шрифтов
         font_candidates = [
+            "segoeui.ttf",
             "arial.ttf",
             "DejaVuSans.ttf",
-            "segoeui.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         ]
-        for candidate in font_candidates:
+        f_header = None
+        f_user = None
+        f_text = None
+        f_small = None
+        f_avatar = None
+
+        for cand in font_candidates:
             try:
-                font_title = ImageFont.truetype(candidate, 18)
-                font_body = ImageFont.truetype(candidate, 16)
-                font_small = ImageFont.truetype(candidate, 13)
+                f_header = ImageFont.truetype(cand, 16 * scale)
+                f_user = ImageFont.truetype(cand, 16 * scale)
+                f_text = ImageFont.truetype(cand, 15 * scale)
+                f_small = ImageFont.truetype(cand, 12 * scale)
+                f_avatar = ImageFont.truetype(cand, 18 * scale)
                 break
             except Exception:
                 continue
 
-        if not font_body:
-            font_title = ImageFont.load_default()
-            font_body = ImageFont.load_default()
-            font_small = ImageFont.load_default()
+        if not f_text:
+            f_header = ImageFont.load_default()
+            f_user = ImageFont.load_default()
+            f_text = ImageFont.load_default()
+            f_small = ImageFont.load_default()
+            f_avatar = ImageFont.load_default()
 
-        # 1. Шапка карточки
-        # Красный бейдж нарушения
-        draw.rounded_rectangle([(20, 18), (170, 48)], radius=6, fill=(231, 76, 60))
-        draw.text((28, 24), f"🚨 {violation_type.upper()}", fill=(255, 255, 255), font=font_small)
+        # -------------------------------------------------------------
+        # 1. ШАПКА ЧАТА (TELEGRAM HEADER)
+        # -------------------------------------------------------------
+        draw.rectangle([(0, 0), (W, header_h)], fill=(23, 33, 43))
+        # Иконка чата (круглый аватар группы)
+        chat_ava_size = 40 * scale
+        ava_x = 20 * scale
+        ava_y = 12 * scale
+        draw.ellipse([(ava_x, ava_y), (ava_x + chat_ava_size, ava_y + chat_ava_size)], fill=(74, 144, 226))
+        # Буква группы
+        group_letter = chat_title[0].upper() if chat_title else "Ч"
+        draw.text((ava_x + 13 * scale, ava_y + 8 * scale), group_letter, fill=(255, 255, 255), font=f_header)
 
-        # Название чата и время
-        now_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        draw.text((185, 25), f"Чат: {chat_title[:30]}", fill=(170, 187, 204), font=font_small)
-        draw.text((width - 150, 25), now_str, fill=(110, 130, 150), font=font_small)
+        # Название чата и статус
+        draw.text((ava_x + chat_ava_size + 14 * scale, 14 * scale), chat_title[:32], fill=(245, 245, 245), font=f_header)
+        draw.text((ava_x + chat_ava_size + 14 * scale, 36 * scale), "Классный чат • фиксация нарушения", fill=(110, 130, 150), font=f_small)
 
-        draw.line([(20, 60), (width - 20, 60)], fill=(30, 45, 62), width=1)
+        # Разделитель под шапкой
+        draw.line([(0, header_h), (W, header_h)], fill=(15, 24, 34), width=2 * scale)
 
-        # 2. Пузырь сообщения (Message bubble)
-        bubble_top = 75
-        bubble_bottom = bubble_top + 45 + text_block_height + 15
-        draw.rounded_rectangle(
-            [(20, bubble_top), (width - 20, bubble_bottom)],
-            radius=10,
-            fill=(24, 37, 51),  # Цвет входящего облачка Telegram
-        )
+        # -------------------------------------------------------------
+        # 2. АВАТАР ПОЛЬЗОВАТЕЛЯ И ПУЗЫРЬ СООБЩЕНИЯ
+        # -------------------------------------------------------------
+        user_ava_size = 42 * scale
+        u_ava_x = 20 * scale
+        u_ava_y = bubble_top + bubble_h - user_ava_size  # аватар снизу сообщения как в TG
 
-        # Имя отправителя
-        draw.text((35, bubble_top + 10), f"{user_name} (ID: {user_id})", fill=(82, 136, 193), font=font_title)
+        ava_color = _get_avatar_color(user_id)
+        draw.ellipse([(u_ava_x, u_ava_y), (u_ava_x + user_ava_size, u_ava_y + user_ava_size)], fill=ava_color)
+        first_letter = user_name[0].upper() if user_name else "U"
+        draw.text((u_ava_x + 14 * scale, u_ava_y + 9 * scale), first_letter, fill=(255, 255, 255), font=f_avatar)
+
+        # Пузырь сообщения (Message Bubble)
+        b_x1 = u_ava_x + user_ava_size + 12 * scale
+        # Ширина пузыря по длине текста
+        longest_line = max(len(l) for l in lines)
+        b_width = max(240 * scale, min(int(longest_line * 9.5 * scale) + 60 * scale, W - b_x1 - 30 * scale))
+        b_x2 = b_x1 + b_width
+        b_y1 = bubble_top
+        b_y2 = bubble_top + bubble_h
+
+        # Скруглённый прямоугольник облачка (цвет входящего в TG Desktop Dark: #182533)
+        radius = 12 * scale
+        draw.rounded_rectangle([(b_x1, b_y1), (b_x2, b_y2)], radius=radius, fill=(24, 37, 51))
+
+        # Имя отправителя (в цвет аватара как в TG)
+        draw.text((b_x1 + 16 * scale, b_y1 + 10 * scale), f"{user_name}", fill=ava_color, font=f_user)
 
         # Текст сообщения
-        curr_y = bubble_top + 40
-        for line in wrapped_lines:
-            draw.text((35, curr_y), line, fill=(245, 245, 245), font=font_body)
-            curr_y += line_height
+        cur_y = b_y1 + 34 * scale
+        for l in lines:
+            draw.text((b_x1 + 16 * scale, cur_y), l, fill=(245, 245, 245), font=f_text)
+            cur_y += line_h
 
-        # 3. Подвал нарушения
-        footer_top = bubble_bottom + 15
+        # Время отправки в правом нижнем углу пузыря
+        time_str = datetime.now().strftime("%H:%M")
+        draw.text((b_x2 - 50 * scale, b_y2 - 20 * scale), time_str, fill=(110, 130, 150), font=f_small)
+
+        # -------------------------------------------------------------
+        # 3. КАРТОЧКА НАРУШЕНИЯ (ДОКАЗАТЕЛЬСТВО)
+        # -------------------------------------------------------------
+        f_box_x1 = 20 * scale
+        f_box_x2 = W - 20 * scale
+        f_box_y1 = footer_top
+        f_box_y2 = footer_top + footer_h
+
+        # Фон плашки нарушения (темно-красный #2b171c с красной рамкой)
         draw.rounded_rectangle(
-            [(20, footer_top), (width - 20, footer_top + 55)],
-            radius=8,
-            fill=(40, 20, 25),
-            outline=(200, 60, 60),
-            width=1,
-        )
-        draw.text((35, footer_top + 10), f"Зафиксировано: «{matched_word}»", fill=(255, 100, 100), font=font_body)
-        draw.text(
-            (35, footer_top + 32),
-            f"Штраф применен. Текущий баланс: {points_left}/10 очков",
-            fill=(200, 200, 200),
-            font=font_small,
+            [(f_box_x1, f_box_y1), (f_box_x2, f_box_y2)],
+            radius=10 * scale,
+            fill=(43, 23, 28),
+            outline=(214, 48, 49),
+            width=2 * scale,
         )
 
-        # Сохранение в буфер байтов
+        # Красный бейдж типа нарушения
+        badge_w = 160 * scale
+        draw.rounded_rectangle(
+            [(f_box_x1 + 14 * scale, f_box_y1 + 14 * scale), (f_box_x1 + 14 * scale + badge_w, f_box_y1 + 42 * scale)],
+            radius=6 * scale,
+            fill=(214, 48, 49),
+        )
+        draw.text((f_box_x1 + 24 * scale, f_box_y1 + 19 * scale), f"🚨 {violation_type.upper()}", fill=(255, 255, 255), font=f_small)
+
+        # Строка с запрещенным словом
+        draw.text(
+            (f_box_x1 + 14 * scale + badge_w + 14 * scale, f_box_y1 + 20 * scale),
+            f"Запрещено: «{matched_word}»",
+            fill=(255, 120, 120),
+            font=f_user,
+        )
+
+        # Строка информации о нарушителе и балансе очков
+        draw.text(
+            (f_box_x1 + 16 * scale, f_box_y1 + 50 * scale),
+            f"ID: {user_id}  •  Штраф применен  •  Осталось очков: {points_left}/10",
+            fill=(200, 205, 215),
+            font=f_small,
+        )
+
+        # Уменьшаем изображение в scale раз со сглаживанием (LANCZOS) для ультра-чёткости
+        final_w = base_width
+        final_h = total_h // scale
+        resampling_filter = getattr(Image, "Resampling", Image).LANCZOS
+        img_smooth = img.resize((final_w, final_h), resample=resampling_filter)
+
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        img_smooth.save(buf, format="PNG", optimize=True)
         buf.seek(0)
         return buf
 

@@ -121,6 +121,31 @@ class Database:
             config.initial_points,
         )
 
+    def _get_user_by_username_sync(self, username_or_id: str) -> Optional[Dict[str, Any]]:
+        clean_input = username_or_id.lstrip("@").strip().lower()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # Пробуем найти по юзернейму или по числовому ID
+            if clean_input.isdigit():
+                cursor.execute(
+                    """SELECT * FROM users 
+                       WHERE user_id = ? OR LOWER(username) = ? 
+                       ORDER BY updated_at DESC LIMIT 1""",
+                    (int(clean_input), clean_input),
+                )
+            else:
+                cursor.execute(
+                    """SELECT * FROM users 
+                       WHERE LOWER(username) = ? 
+                       ORDER BY updated_at DESC LIMIT 1""",
+                    (clean_input,),
+                )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_user_by_username(self, username_or_id: str) -> Optional[Dict[str, Any]]:
+        return await asyncio.to_thread(self._get_user_by_username_sync, username_or_id)
+
     def _deduct_points_sync(self, chat_id: int, user_id: int, amount: int) -> int:
         now_str = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
