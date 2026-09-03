@@ -1,5 +1,6 @@
 """
 Обработчик модерации всех входящих сообщений:
+- Проверка активного мута (включая админов — удаление всех сообщений)
 - Проверка на спам (-1 очко)
 - Проверка на мат (-1 очко)
 - Проверка на оскорбления (мут на 2 часа)
@@ -7,6 +8,7 @@
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Tuple
 from aiogram import Router, types, Bot
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError
@@ -24,8 +26,17 @@ async def apply_mute(
     chat_id: int,
     user_id: int,
     duration_hours: int,
-) -> bool:
-    """Ограничение прав пользователя на отправку сообщений (мут)."""
+) -> Tuple[bool, bool]:
+    """
+    Накладывает мут на пользователя:
+    1. Записывает время окончания в базу данных (виртуальный мут — работает даже если участник админ!)
+    2. Пытается применить системный мут в Telegram через restrictChatMember.
+    Возвращает: (is_telegram_restricted: bool, is_virtual_only: bool)
+    """
+    # 1. Всегда включаем виртуальный мут в БД (автоудаление любых сообщений нарушителя)
+    await db.set_user_mute(chat_id, user_id, duration_hours)
+
+    # 2. Пытаемся замутить через Telegram API
     until_date = datetime.now(timezone.utc) + timedelta(hours=duration_hours)
     try:
         permissions = types.ChatPermissions(
@@ -46,11 +57,11 @@ async def apply_mute(
             permissions=permissions,
             until_date=until_date,
         )
-        await db.record_mute(chat_id, user_id)
-        return True
-    except TelegramAPIError as e:
-        print(f"[ERROR] Не удалось ограничить пользователя {user_id} в чате {chat_id}: {e}")
-        return False
+        return True, False
+    except TelegramAPIError:
+        # Участник является администратором чата — Telegram API не позволяет напрямую ограничить админа.
+        # В этом случае работает наш виртуальный мут (бот просто сразу удаляет любые его новые сообщения)!
+        return False, True
 
 
 @router.message()
@@ -64,15 +75,25 @@ async def process_chat_message(message: types.Message, bot: Bot):
     if not message.from_user or message.from_user.is_bot:
         return
 
-    # Игнорируем команды (они обрабатываются в других роутерах)
-    text = message.text or message.caption or ""
-    if text.startswith("/"):
-        return
-
     user = message.from_user
     chat_id = message.chat.id
     user_id = user.id
     user_name = user.first_name or user.username or f"ID_{user_id}"
+
+    # 0. ПРОВЕРКА АКТИВНОГО МУТА (РАБОТАЕТ ДЛЯ ВСЕХ, ВКЛЮЧАЯ АДМИНОВ!)
+    is_muted, remaining_sec = await db.is_user_muted(chat_id, user_id)
+    if is_muted:
+        # Участник находится в муте — удаляем любое его сообщение
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
+
+    # Игнорируем команды (они обрабатываются в роутерах команд)
+    text = message.text or message.caption or ""
+    if text.startswith("/"):
+        return
 
     # Регистрируем/обновляем пользователя в базе данных
     await db.get_or_create_user(
@@ -101,25 +122,23 @@ async def process_chat_message(message: types.Message, bot: Bot):
                 pass
 
         # Накладываем мут на 2 часа
-        success = await apply_mute(
+        is_tg, is_virt = await apply_mute(
             bot=bot,
             chat_id=chat_id,
             user_id=user_id,
             duration_hours=config.insult_mute_hours,
         )
 
-        if success:
-            await message.answer(
-                f"🤐 <b>{user_name}</b> отправлен в мут на <b>{config.insult_mute_hours} часа</b> за оскорбление!\n"
-                "💡 <i>Ведите себя вежливо и уважайте одноклассников.</i>",
-                parse_mode=ParseMode.HTML,
-            )
-        else:
-            await message.answer(
-                f"⚠️ <b>{user_name}</b> нарушил правила (оскорбление), но бот не смог выдать мут.\n"
-                "<i>Выдайте боту права Администратора с возможностью блокировать пользователей!</i>",
-                parse_mode=ParseMode.HTML,
-            )
+        admin_note = (
+            "\n<i>(Поскольку у вас статус админа чата, бот включил режим автоудаления всех ваших сообщений на 2 часа)</i>"
+            if is_virt
+            else ""
+        )
+        await message.answer(
+            f"🤐 <b>{user_name}</b> отправлен в мут на <b>{config.insult_mute_hours} часа</b> за оскорбление!{admin_note}\n"
+            "💡 <i>Ведите себя вежливо и уважайте одноклассников.</i>",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     # 2. ПРОВЕРКА НА СПАМ И ФЛУД (-1 очко)
@@ -142,7 +161,7 @@ async def process_chat_message(message: types.Message, bot: Bot):
 
         if new_points <= 0:
             # Очки исчерпаны -> Мут на 24 часа
-            success = await apply_mute(
+            is_tg, is_virt = await apply_mute(
                 bot=bot,
                 chat_id=chat_id,
                 user_id=user_id,
@@ -151,17 +170,16 @@ async def process_chat_message(message: types.Message, bot: Bot):
             await db.reset_points(chat_id, user_id)
             spam_detector.reset_user(chat_id, user_id)
 
-            if success:
-                await message.answer(
-                    f"🚨 <b>{user_name}</b> исчерпал все очки (0/{config.initial_points}) и отправлен в мут на <b>{config.zero_points_mute_hours} часов</b> за постоянный спам ({spam_reason})!\n"
-                    f"Очки восстановлены до {config.initial_points}.",
-                    parse_mode=ParseMode.HTML,
-                )
-            else:
-                await message.answer(
-                    f"🚨 У <b>{user_name}</b> закончились очки (0/{config.initial_points}), но бот не смог выдать мут. Проверьте права администратора!",
-                    parse_mode=ParseMode.HTML,
-                )
+            admin_note = (
+                "\n<i>(Для участников с правами админа активен режим автоудаления сообщений на 24 часа)</i>"
+                if is_virt
+                else ""
+            )
+            await message.answer(
+                f"🚨 <b>{user_name}</b> исчерпал все очки (0/{config.initial_points}) и отправлен в мут на <b>{config.zero_points_mute_hours} часов</b> за постоянный спам ({spam_reason})!{admin_note}\n"
+                f"Очки восстановлены до {config.initial_points}.",
+                parse_mode=ParseMode.HTML,
+            )
         else:
             await message.answer(
                 f"⚠️ <b>{user_name}</b>, спам запрещён ({spam_reason})!\n"
@@ -189,7 +207,7 @@ async def process_chat_message(message: types.Message, bot: Bot):
 
         if new_points <= 0:
             # Очки исчерпаны -> Мут на 24 часа
-            success = await apply_mute(
+            is_tg, is_virt = await apply_mute(
                 bot=bot,
                 chat_id=chat_id,
                 user_id=user_id,
@@ -197,17 +215,16 @@ async def process_chat_message(message: types.Message, bot: Bot):
             )
             await db.reset_points(chat_id, user_id)
 
-            if success:
-                await message.answer(
-                    f"🚨 <b>{user_name}</b> исчерпал все очки (0/{config.initial_points}) и отправлен в мут на <b>{config.zero_points_mute_hours} часов</b> за нецензурную брань!\n"
-                    f"Очки восстановлены до {config.initial_points}.",
-                    parse_mode=ParseMode.HTML,
-                )
-            else:
-                await message.answer(
-                    f"🚨 У <b>{user_name}</b> закончились очки (0/{config.initial_points}), но бот не смог выдать мут. Проверьте права администратора!",
-                    parse_mode=ParseMode.HTML,
-                )
+            admin_note = (
+                "\n<i>(Для участников с правами админа активен режим автоудаления сообщений на 24 часа)</i>"
+                if is_virt
+                else ""
+            )
+            await message.answer(
+                f"🚨 <b>{user_name}</b> исчерпал все очки (0/{config.initial_points}) и отправлен в мут на <b>{config.zero_points_mute_hours} часов</b> за нецензурную брань!{admin_note}\n"
+                f"Очки восстановлены до {config.initial_points}.",
+                parse_mode=ParseMode.HTML,
+            )
         else:
             await message.answer(
                 f"⚠️ <b>{user_name}</b>, не выражайся! В чате действует цензура.\n"

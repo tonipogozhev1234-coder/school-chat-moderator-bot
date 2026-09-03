@@ -57,8 +57,11 @@ async def cmd_unmute(message: types.Message, bot: Bot):
         )
         return
 
+    # 1. Снимаем виртуальный мут в БД
+    await db.remove_user_mute(message.chat.id, target_user.id)
+
+    # 2. Снимаем ограничения в Telegram API, если они были установлены
     try:
-        # Снимаем ограничения (возвращаем полные права отправки)
         permissions = types.ChatPermissions(
             can_send_messages=True,
             can_send_audios=True,
@@ -76,12 +79,13 @@ async def cmd_unmute(message: types.Message, bot: Bot):
             user_id=target_user.id,
             permissions=permissions,
         )
-        await message.reply(
-            f"✅ Мут с участника <b>{target_user.first_name}</b> успешно снят!",
-            parse_mode=ParseMode.HTML,
-        )
-    except Exception as e:
-        await message.reply(f"⚠️ Не удалось снять мут: {e}")
+    except Exception:
+        pass  # Если участник админ в Telegram, ошибка допустима, виртуальный мут уже снят
+
+    await message.reply(
+        f"✅ Мут с участника <b>{target_user.first_name}</b> успешно снят!",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @router.message(Command("addpoints", "дать_очки"))

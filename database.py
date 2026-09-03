@@ -4,9 +4,9 @@
 
 import sqlite3
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
 
 from config import config
@@ -40,11 +40,17 @@ class Database:
                     points INTEGER DEFAULT 10,
                     warnings_count INTEGER DEFAULT 0,
                     mutes_count INTEGER DEFAULT 0,
+                    muted_until TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (chat_id, user_id)
                 )
             """)
+            # Миграция: добавляем muted_until если таблица уже существовала
+            try:
+                cursor.execute("ALTER TABLE users ADD COLUMN muted_until TEXT")
+            except sqlite3.OperationalError:
+                pass  # Колонка уже существует
             # Таблица журнала нарушений
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS violations (
@@ -212,6 +218,58 @@ class Database:
     async def record_mute(self, chat_id: int, user_id: int) -> None:
         await asyncio.to_thread(self._record_mute_sync, chat_id, user_id)
 
+    def _set_user_mute_sync(self, chat_id: int, user_id: int, duration_hours: int) -> str:
+        until_dt = datetime.now(timezone.utc) + timedelta(hours=duration_hours)
+        until_str = until_dt.isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE users 
+                   SET muted_until = ?, mutes_count = mutes_count + 1 
+                   WHERE chat_id = ? AND user_id = ?""",
+                (until_str, chat_id, user_id),
+            )
+            conn.commit()
+        return until_str
+
+    async def set_user_mute(self, chat_id: int, user_id: int, duration_hours: int) -> str:
+        return await asyncio.to_thread(self._set_user_mute_sync, chat_id, user_id, duration_hours)
+
+    def _is_user_muted_sync(self, chat_id: int, user_id: int) -> Tuple[bool, int]:
+        """Возвращает (в_муте_ли, оставшиеся_секунды)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT muted_until FROM users WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+            row = cursor.fetchone()
+            if not row or not row["muted_until"]:
+                return False, 0
+
+            try:
+                until_dt = datetime.fromisoformat(row["muted_until"])
+                now_dt = datetime.now(timezone.utc)
+                remaining = int((until_dt - now_dt).total_seconds())
+                if remaining > 0:
+                    return True, remaining
+                else:
+                    # Мут истёк — сбрасываем
+                    cursor.execute("UPDATE users SET muted_until = NULL WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+                    conn.commit()
+                    return False, 0
+            except Exception:
+                return False, 0
+
+    async def is_user_muted(self, chat_id: int, user_id: int) -> Tuple[bool, int]:
+        return await asyncio.to_thread(self._is_user_muted_sync, chat_id, user_id)
+
+    def _remove_user_mute_sync(self, chat_id: int, user_id: int) -> None:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET muted_until = NULL WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+            conn.commit()
+
+    async def remove_user_mute(self, chat_id: int, user_id: int) -> None:
+        await asyncio.to_thread(self._remove_user_mute_sync, chat_id, user_id)
+
     def _get_chat_leaderboard_sync(self, chat_id: int, limit: int = 10) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -230,3 +288,4 @@ class Database:
 
 
 db = Database()
+

@@ -138,6 +138,19 @@ def test_database():
             points = await test_db.reset_points(chat_id, user_id)
             assert points == 10
 
+            # Проверка виртуального мута (для админов и обычных участников)
+            is_muted, rem = await test_db.is_user_muted(chat_id, user_id)
+            assert not is_muted, "Пользователь не должен быть в муте изначально"
+
+            await test_db.set_user_mute(chat_id, user_id, duration_hours=2)
+            is_muted, rem = await test_db.is_user_muted(chat_id, user_id)
+            assert is_muted, "Пользователь должен быть в виртуальном муте"
+            assert rem > 0
+
+            await test_db.remove_user_mute(chat_id, user_id)
+            is_muted, _ = await test_db.is_user_muted(chat_id, user_id)
+            assert not is_muted, "После размута статус мута должен быть снят"
+
         asyncio.run(run_db_tests())
     print("✅ Тест базы данных успешно пройден!")
 
