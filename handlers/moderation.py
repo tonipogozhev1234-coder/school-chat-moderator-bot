@@ -67,9 +67,7 @@ async def apply_mute(
 @router.message()
 async def process_chat_message(message: types.Message, bot: Bot):
     """Главный фильтр сообщений чата."""
-    # Работаем только в группах и супергруппах
-    if message.chat.type not in ("group", "supergroup"):
-        return
+    is_private = (message.chat.type == "private")
 
     # Игнорируем других ботов и служебные сообщения
     if not message.from_user or message.from_user.is_bot:
@@ -80,15 +78,15 @@ async def process_chat_message(message: types.Message, bot: Bot):
     user_id = user.id
     user_name = user.first_name or user.username or f"ID_{user_id}"
 
-    # 0. ПРОВЕРКА АКТИВНОГО МУТА (РАБОТАЕТ ДЛЯ ВСЕХ, ВКЛЮЧАЯ АДМИНОВ!)
-    is_muted, remaining_sec = await db.is_user_muted(chat_id, user_id)
-    if is_muted:
-        # Участник находится в муте — удаляем любое его сообщение
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        return
+    # 0. ПРОВЕРКА АКТИВНОГО МУТА (РАБОТАЕТ ДЛЯ ВСЕХ, ВКЛЮЧАЯ АДМИНОВ В ГРУППАХ!)
+    if not is_private:
+        is_muted, remaining_sec = await db.is_user_muted(chat_id, user_id)
+        if is_muted:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
 
     # Игнорируем команды (они обрабатываются в роутерах команд)
     text = message.text or message.caption or ""
@@ -114,14 +112,21 @@ async def process_chat_message(message: types.Message, bot: Bot):
             points_deducted=0,
         )
 
-        # Удаляем оскорбительное сообщение
+        if is_private:
+            await message.reply(
+                f"🤐 <b>{user_name}</b>, за это оскорбление в группе вы бы получили <b>МУТ НА {config.insult_mute_hours} ЧАСА</b>!\n"
+                "💡 <i>Ведите себя вежливо и уважайте одноклассников.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        # В группе: удаляем и накладываем мут
         if config.delete_violating_messages:
             try:
                 await message.delete()
             except Exception:
                 pass
 
-        # Накладываем мут на 2 часа
         is_tg, is_virt = await apply_mute(
             bot=bot,
             chat_id=chat_id,
@@ -153,6 +158,22 @@ async def process_chat_message(message: types.Message, bot: Bot):
             points_deducted=config.spam_penalty,
         )
 
+        if is_private:
+            if new_points <= 0:
+                await db.reset_points(chat_id, user_id)
+                await message.reply(
+                    f"🚨 <b>{user_name}</b>, вы исчерпали все очки (0/{config.initial_points}) за спам!\n"
+                    f"В группе вы бы отправились в мут на <b>{config.zero_points_mute_hours} часа</b>. Очки восстановлены до {config.initial_points}.",
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await message.reply(
+                    f"⚠️ <b>{user_name}</b>, спам запрещён ({spam_reason})!\n"
+                    f"Штраф: <b>-{config.spam_penalty} очко</b>. Осталось очков: <b>{new_points}/{config.initial_points}</b>.",
+                    parse_mode=ParseMode.HTML,
+                )
+            return
+
         if config.delete_violating_messages:
             try:
                 await message.delete()
@@ -160,7 +181,7 @@ async def process_chat_message(message: types.Message, bot: Bot):
                 pass
 
         if new_points <= 0:
-            # Очки исчерпаны -> Мут на 24 часа
+            # Очки исчерпаны -> Мут на 3 часа
             is_tg, is_virt = await apply_mute(
                 bot=bot,
                 chat_id=chat_id,
@@ -200,6 +221,23 @@ async def process_chat_message(message: types.Message, bot: Bot):
             points_deducted=config.mat_penalty,
         )
 
+        if is_private:
+            if new_points <= 0:
+                await db.reset_points(chat_id, user_id)
+                await message.reply(
+                    f"🚨 <b>{user_name}</b>, вы исчерпали все очки (0/{config.initial_points})!\n"
+                    f"В группе вы бы отправились в мут на <b>{config.zero_points_mute_hours} часа</b>. Очки восстановлены до {config.initial_points}.",
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await message.reply(
+                    f"⚠️ <b>{user_name}</b>, за мат штраф <b>-{config.mat_penalty} очко</b>!\n"
+                    f"Осталось очков: <b>{new_points}/{config.initial_points}</b>.\n"
+                    "💡 <i>(В личке мут не применяется. Добавьте бота в группу класса и дайте права Администратора)</i>",
+                    parse_mode=ParseMode.HTML,
+                )
+            return
+
         if config.delete_violating_messages:
             try:
                 await message.delete()
@@ -207,7 +245,7 @@ async def process_chat_message(message: types.Message, bot: Bot):
                 pass
 
         if new_points <= 0:
-            # Очки исчерпаны -> Мут на 24 часа
+            # Очки исчерпаны -> Мут на 3 часа
             is_tg, is_virt = await apply_mute(
                 bot=bot,
                 chat_id=chat_id,
