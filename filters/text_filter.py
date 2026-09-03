@@ -1,10 +1,11 @@
 """
-Фильтрация текста сообщений: обнаружение мата и оскорблений.
+Фильтрация текста сообщений: глубокое обнаружение мата и оскорблений.
+Защита от любых попыток обхода (пробелы, точки, спецсимволы, leetspeak, транслит).
 """
 
 import re
 from enum import Enum
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 
 
 class ViolationType(str, Enum):
@@ -13,95 +14,146 @@ class ViolationType(str, Enum):
     INSULT = "insult"
 
 
-# Таблица транслитерации и leetspeak (замена визуально похожих символов на кириллицу)
-LEETSPEAK_MAP = {
-    'a': 'а', 'b': 'б', 'c': 'с', 'e': 'е', 'k': 'к', 'm': 'м',
-    'h': 'н', 'o': 'о', 'p': 'р', 't': 'т', 'y': 'у', 'x': 'х',
-    '@': 'а', '0': 'о', '1': 'и', '3': 'з', '4': 'ч', '6': 'б',
-    '$': 'с', 'u': 'и', 'v': 'в', 'w': 'в', 'i': 'и'
+# Таблица замен транслитерации двухбуквенных сочетаний
+TRANSLIT_BIGRAMS = {
+    'ya': 'я', 'yu': 'ю', 'sh': 'ш', 'ch': 'ч', 'zh': 'ж',
+    'th': 'т', 'ph': 'ф', 'ck': 'к', 'yo': 'ё', 'ye': 'е',
 }
 
-# Белый список частых слов, содержащих спорные подстроки, но не являющихся матом
+# Таблица транслитерации и leetspeak одиночных символов
+LEETSPEAK_MAP = {
+    'a': 'а', 'b': 'б', 'c': 'с', 'd': 'д', 'e': 'е', 'f': 'ф',
+    'g': 'г', 'h': 'х', 'i': 'и', 'j': 'й', 'k': 'к', 'l': 'л',
+    'm': 'м', 'n': 'н', 'o': 'о', 'p': 'р', 'r': 'р', 's': 'с',
+    't': 'т', 'u': 'у', 'v': 'в', 'w': 'в', 'x': 'х', 'y': 'у',
+    'z': 'з',
+    # Цифры и спецсимволы, визуально заменяющие буквы
+    '@': 'а', '0': 'о', '1': 'и', '3': 'з', '4': 'ч', '6': 'б',
+    '$': 'с', '!': 'и'
+}
+
+# Белый список невинных слов, содержащих похожие части корней
 WHITELIST_WORDS = {
     "колебания", "колебание", "колебаться", "колеблется", "колебаний",
-    "употребление", "употреблять", "употреблять", "потребление", "злоупотребление",
+    "употребление", "употреблять", "потребление", "злоупотребление",
     "рубль", "рубля", "рублей", "рубли", "рублям",
     "хлеб", "хлебом", "хлебороб",
     "стебель", "гребля", "грести",
     "ястреб", "ястребы",
+    "сабля", "сабли",
     "скипидар", "педагог", "педагогика",
     "страхование", "страховка", "перестраховка",
     "ребенок", "ребёнок", "ребята",
-    "оскорбление", "оскорблять", "оскорбил"
+    "оскорбление", "оскорблять", "оскорбил",
+    "влюблен", "влюбленный", "влюблена"
 }
 
-# Регулярные выражения для прямых оскорблений (наказывается мутом на 2 часа)
+# Регулярные выражения для оскорблений (мут на 2 часа)
 INSULT_PATTERNS = [
-    # Личные грубые оскорбления
-    r"\b(ты|вы|он|она|чел|чувак|этот)?\s*(дебил|даун|дура[кч]?|урод|шлюх[аеиу]|тварь|мразь|гной|биомусор|ничтожество)\b",
-    r"\b(чмо|чмошник|петух|лошара|лошок|собака|сучара|гнида|шалава|паскуда)\b",
-    # Матерные прямые оскорбления
-    r"\b(пидор|пидар|педик|пидорас|гондон|гандон|хуесос|долбоеб|долбоёб|уебище|уёбище|мудила|мудак|еблан|ёблан)\b",
+    r"\b(ты|вы|он|она|чел|чувак|этот)?\s*(дебил\w*|даун\w*|дура[кч]?\w*|урод\w*|шлюх\w*|тварь\w*|мразь\w*|гной\w*|биомусор|ничтожество)\b",
+    r"\b(чмо|чмошник\w*|чмоня|петух\w*|лошара|лошок|сучар\w*|гнида|шалав\w*|паскуд\w*)\b",
+    r"\b(пид[ао]р\w*|педик\w*|пидорас\w*|пидарас\w*|г[ао]ндон\w*|хуесос\w*|долбо[её]б\w*|у[её]бищ\w*|мудил\w*|мудак\w*|еблан\w*|ёблан\w*)\b",
     r"\b(пошел|пошёл|иди|пшел|вали)\s+(на\s*хуй|в\s*пизду|в\s*жопу)\b",
     r"\b(рот\s*закрой|закрой\s*пасть|ебало\s*завали|завали\s*ебало)\b",
-    r"\b(соси\s+хуй|соси|отсоси|отсоси\s+хуй)\b",
+    r"\b(соси\s+хуй|соси\s+член|отсоси|отсоси\s+хуй)\b",
     r"\bмать\s+(твою|ебал|жива|в\s*канаве)\b",
 ]
 
-# Регулярные выражения для нецензурной лексики (мата), наказывается -1 очком
+# Полный перечень регулярных выражений для мата (-1 очко)
 MAT_PATTERNS = [
-    # Корень хуй / хуе / хуя / хуи
-    r"\b(ху[йиеёяю]|ху[её]в|ху[её]н|нах[уеё]|пох[уеё])\w*\b",
-    r"\bхули\b",
-    # Корень пизд
-    r"\b(пизд|пизда|пиздец|пиздо|спизд|впизд|распизд|отпизд)\w*\b",
-    # Корень еб / ёб
-    r"\b([её]б[аеёиоуы]|выеб|заеб|перееб|подъеб|наеб|уеб|въеб|доеб|проеб|разъеб|с[ъеё]б|объеб)\w*\b",
-    r"\bеб[латьуетны]\w*\b",
-    # Корень бля / бляд
-    r"\b(бл[яея]д|бля|бляха|блядство|блядина)\w*\b",
+    # Корень хуй (хуй, хуйня, хуевый, охуеть, нахуй, похуй, дохуя, хули и др.)
+    r"\b(ху[йиеёяю]|ху[её]в|ху[её]н|ху[её]к|ху[её]п|ху[её]р|нах[уеё]|пох[уеё]|доху[яе]|ниху[яе]|хули|хуле|хуищ|хуйло|хуеплет|хуеплёт|отхуя|захуя|вхуя|прихуя|оху[ееёи]|аху[ееёи])\w*\b",
+    
+    # Корень пизд (пизда, пиздец, пиздос, пиздишь, спиздил, распиздяй и др.)
+    r"\b(пизд|пизда|пиздец|пиздос|пизди|пиздел|спизд|впизд|распизд|отпизд|допизд|припизд|пиздюк|пиздеж|пиздёж)\w*\b",
+    
+    # Корень еб / ёб (ебать, ебет, ёбаный, заебал, въебал, доебал, наебал, проебал, ебучий и др.)
+    r"\b([её]б[аеёиоуы]|въ[её]б|выеб|выёб|за[её]б|до[её]б|на[её]б|об[её]б|от[её]б|пере[её]б|подъ[её]б|при[её]б|про[её]б|разъ[её]б|с[ъеё]б|у[её]б|ебуч|ебл[оа]|ебальн|ебнут|ёбнут)\w*\b",
+    
+    # Корень бля (бля, блять, блядь, блядина, блядство, бляха)
+    r"\b(бл[яея]д|бля|бляха|блядств|блядин|побляд|блять)\w*\b",
+    
     # Корень сука
-    r"\bсук[аеиоу]\b",
-    r"\bсучка\b",
-    # Корень манд
+    r"\b(сук[аеиоу]|суч[аеиоу]р|сучь|сучк)\w*\b",
+    
+    # Дополнительные матерные и грубые корни
     r"\bманд[аеуоы]\w*\b",
-    # Корень залуп
     r"\bзалуп\w*\b",
-    # Дополнительно
-    r"\bелд[аеу]\b",
+    r"\bдроч\w*\b",
+    r"\bподроч\w*\b",
+    r"\bелд[аеу]\w*\b",
 ]
 
 
-def normalize_text(text: str) -> str:
+def transliterate_and_normalize(text: str) -> str:
     """
-    Приведение текста к нижнему регистру, замена похожих символов
-    и удаление попыток замаскировать слова точками, тире и пробелами.
+    Приведение текста к нижнему регистру, замена транслита (ya -> я),
+    латиницы и leetspeak символов (@, 0, 1, 3, 4, 6) на русскую кириллицу.
     """
     if not text:
         return ""
 
     lowered = text.lower()
 
-    # Замена латиницы и leetspeak символов на аналогичную кириллицу
-    trans_chars = []
+    # 1. Двухбуквенные сочетания транслита
+    for bigram, cyr in TRANSLIT_BIGRAMS.items():
+        lowered = lowered.replace(bigram, cyr)
+
+    # 2. Одиночные символы
+    chars = []
     for char in lowered:
-        trans_chars.append(LEETSPEAK_MAP.get(char, char))
-    converted = "".join(trans_chars)
+        chars.append(LEETSPEAK_MAP.get(char, char))
+    converted = "".join(chars)
 
-    # Убираем повторяющиеся одинаковые символы подряд (например, "сууууука" -> "сука")
+    # 3. Схлопывание повторяющихся одинаковых букв (например: "сууууука" -> "сука", "блллля" -> "бля")
     compressed = re.sub(r'(.)\1{2,}', r'\1', converted)
-
     return compressed
 
 
-def remove_spacing_tricks(text: str) -> str:
+def remove_spacing_and_symbols_tricks(text: str) -> str:
     """
-    Убирает пробелы, точки, дефисы между буквами одного слова (например, "х.у.й" или "п и з д а").
+    Удаляет знаки препинания внутри слов (б.л.я., б/л/я, п*и*з*д*а)
+    и склеивает последовательности из одиночных букв (б            л               я.).
+    Не склеивает обычные слова нормального предложения (например, 'хлеб я люблю').
     """
-    # Если строка разбита пробелами/символами типа "п . и . з . д . а"
-    pattern = r'(?<=[а-яёa-z])[\s\.\-_,\*]+(?=[а-яёa-z])'
-    condensed = re.sub(pattern, '', text)
-    return condensed
+    if not text:
+        return ""
+
+    # 1. Удаляем любые знаки препинания и символы (включая _, ., -, *, /, |, + и т.д.)
+    # находящиеся непосредственно между буквами/цифрами:
+    # "б.л.я." -> "бля.", "б_л_я" -> "бля", "б/л/я" -> "бля", "п*и*з*д*а" -> "пизда"
+    no_symbols = re.sub(r'(?<=[а-яёa-z0-9])(?:[^\w\s]|_)+(?=[а-яёa-z0-9])', '', text)
+
+    # 2. Склеиваем слова, написанные через пробелы одиночными буквами:
+    # "б            л               я." -> "бля."
+    # "х   у   й" -> "хуй"
+    # "п  и  з  д  е  ц" -> "пиздец"
+    words = no_symbols.split()
+    reconstructed: List[str] = []
+    single_letters_buffer: List[str] = []
+
+    for word in words:
+        clean_word = re.sub(r'[^а-яёa-z0-9]', '', word)
+        if len(clean_word) == 1:
+            single_letters_buffer.append(clean_word)
+        elif len(clean_word) == 0:
+            # Токен состоит только из символов разделителей (например, "/", "|", "+", "*", "-")
+            # Пропускаем его, он не должен разрывать цепочку одиночных букв
+            continue
+        else:
+            if len(single_letters_buffer) >= 2:
+                reconstructed.append("".join(single_letters_buffer))
+            else:
+                reconstructed.extend(single_letters_buffer)
+            single_letters_buffer = []
+            reconstructed.append(word)
+
+    if len(single_letters_buffer) >= 2:
+        reconstructed.append("".join(single_letters_buffer))
+    elif single_letters_buffer:
+        reconstructed.extend(single_letters_buffer)
+
+    return " ".join(reconstructed)
 
 
 def check_text_violation(text: str) -> Tuple[ViolationType, Optional[str]]:
@@ -117,37 +169,31 @@ def check_text_violation(text: str) -> Tuple[ViolationType, Optional[str]]:
     if not text:
         return ViolationType.NONE, None
 
-    normalized = normalize_text(text)
-    condensed = remove_spacing_tricks(normalized)
+    # Подготавливаем варианты текста для анализа:
+    # Вариант 1: Текст после нормализации транслита и leetspeak
+    norm = transliterate_and_normalize(text)
+
+    # Вариант 2: Текст после раскрытия маскировочных знаков препинания и межбуквенных пробелов
+    condensed = remove_spacing_and_symbols_tricks(norm)
+
+    variants = [condensed, norm]
 
     # 1. Проверка на оскорбления
-    for pattern in INSULT_PATTERNS:
-        match = re.search(pattern, normalized, re.IGNORECASE)
-        if match:
-            # Проверяем, не в белом ли списке
-            word = match.group(0).strip()
-            if word not in WHITELIST_WORDS:
-                return ViolationType.INSULT, word
-
-        # Проверяем также слитую версию
-        match_cond = re.search(pattern, condensed, re.IGNORECASE)
-        if match_cond:
-            word = match_cond.group(0).strip()
-            if word not in WHITELIST_WORDS:
-                return ViolationType.INSULT, word
+    for variant in variants:
+        for pattern in INSULT_PATTERNS:
+            match = re.search(pattern, variant, re.IGNORECASE)
+            if match:
+                word = match.group(0).strip()
+                if word not in WHITELIST_WORDS:
+                    return ViolationType.INSULT, word
 
     # 2. Проверка на мат
-    for pattern in MAT_PATTERNS:
-        match = re.search(pattern, normalized, re.IGNORECASE)
-        if match:
-            word = match.group(0).strip()
-            if word not in WHITELIST_WORDS:
-                return ViolationType.MAT, word
-
-        match_cond = re.search(pattern, condensed, re.IGNORECASE)
-        if match_cond:
-            word = match_cond.group(0).strip()
-            if word not in WHITELIST_WORDS:
-                return ViolationType.MAT, word
+    for variant in variants:
+        for pattern in MAT_PATTERNS:
+            match = re.search(pattern, variant, re.IGNORECASE)
+            if match:
+                word = match.group(0).strip()
+                if word not in WHITELIST_WORDS:
+                    return ViolationType.MAT, word
 
     return ViolationType.NONE, None

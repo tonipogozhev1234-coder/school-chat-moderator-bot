@@ -42,6 +42,21 @@ def test_mat_detection():
         "х.у.й тебе",
         "да похyй вообще",  # латиница y
         "б л я т ь",
+        "б.л.я.",
+        "б            л               я.",
+        "б / л / я",
+        "б | л | я",
+        "б + л + я",
+        "б_л_я",
+        "б-л-я",
+        "b.l.y.a",
+        "п*и*з*д*е*ц",
+        "х   у   й",
+        "н а х у й",
+        "п о х у й",
+        "х у й н я",
+        "з а е б а л",
+        "о х у е л",
     ]
     for phrase in mat_phrases:
         v_type, matched = check_text_violation(phrase)
@@ -59,6 +74,11 @@ def test_insult_detection():
         "завали ебало",
         "чмошник конченый",
         "соси хуй",
+        "х у е с о с",
+        "д е б и л",
+        "п и д о р",
+        "ш л ю х а",
+        "м у д а к",
     ]
     for phrase in insult_phrases:
         v_type, matched = check_text_violation(phrase)

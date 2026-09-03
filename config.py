@@ -57,7 +57,7 @@ class Config:
         default_factory=lambda: int(os.getenv("INSULT_MUTE_HOURS", "2"))
     )
     zero_points_mute_hours: int = field(
-        default_factory=lambda: int(os.getenv("ZERO_POINTS_MUTE_HOURS", "24"))
+        default_factory=lambda: int(os.getenv("ZERO_POINTS_MUTE_HOURS", "3"))
     )
     delete_violating_messages: bool = field(
         default_factory=lambda: os.getenv("DELETE_VIOLATING_MESSAGES", "True").lower() in ("true", "1", "yes")

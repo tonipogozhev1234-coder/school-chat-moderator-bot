@@ -24,7 +24,7 @@ async def cmd_start(message: types.Message):
             f"• Каждому даётся <b>{config.initial_points} очков</b>.\n"
             f"• За мат: <b>-{config.mat_penalty} очко</b>.\n"
             f"• За спам и флуд: <b>-{config.spam_penalty} очко</b>.\n"
-            f"• Если очки упадут до 0: мут на <b>{config.zero_points_mute_hours} часов</b>.\n"
+            f"• Если очки упадут до 0: мут на <b>{config.zero_points_mute_hours} часа</b>.\n"
             f"• За оскорбление участников: немедленный мут на <b>{config.insult_mute_hours} часа</b>!\n\n"
             "Команды в чате:\n"
             "/rules — правила чата\n"
@@ -45,13 +45,14 @@ async def cmd_start(message: types.Message):
 @router.message(Command("rules", "правила"))
 async def cmd_rules(message: types.Message):
     """Показать правила классного чата."""
+    zero_word = "часа" if config.zero_points_mute_hours in (2, 3, 4) else "часов"
     text = (
         "📜 <b>ПРАВИЛА НАШЕГО КЛАССНОГО ЧАТА:</b>\n\n"
         f"1️⃣ Каждому участнику на старте даётся <b>{config.initial_points} очков</b>.\n"
         f"2️⃣ <b>Мат запрещён</b> — штраф <b>-{config.mat_penalty} очко</b> за каждое матное слово.\n"
         f"3️⃣ <b>Спам и флуд запрещены</b> — штраф <b>-{config.spam_penalty} очко</b>.\n"
         f"4️⃣ <b>Оскорбления участников</b> — немедленный <b>МУТ НА {config.insult_mute_hours} ЧАСА</b>!\n"
-        f"5️⃣ Если баланс очков падает до <b>0</b> — автоматический <b>МУТ НА {config.zero_points_mute_hours} ЧАСОВ</b>, после чего баланс восстанавливается до {config.initial_points}.\n\n"
+        f"5️⃣ Если баланс очков падает до <b>0</b> — автоматический <b>МУТ НА {config.zero_points_mute_hours} {zero_word.upper()}</b>, после чего баланс восстанавливается до {config.initial_points}.\n\n"
         "💡 <i>Проверить свои очки:</i> <code>/score</code>\n"
         "🏆 <i>Таблица очков участников:</i> <code>/top</code>"
     )

@@ -170,13 +170,14 @@ async def process_chat_message(message: types.Message, bot: Bot):
             await db.reset_points(chat_id, user_id)
             spam_detector.reset_user(chat_id, user_id)
 
+            zero_word = "часа" if config.zero_points_mute_hours in (2, 3, 4) else "часов"
             admin_note = (
-                "\n<i>(Для участников с правами админа активен режим автоудаления сообщений на 24 часа)</i>"
+                f"\n<i>(Для участников с правами админа активен режим автоудаления сообщений на {config.zero_points_mute_hours} {zero_word})</i>"
                 if is_virt
                 else ""
             )
             await message.answer(
-                f"🚨 <b>{user_name}</b> исчерпал все очки (0/{config.initial_points}) и отправлен в мут на <b>{config.zero_points_mute_hours} часов</b> за постоянный спам ({spam_reason})!{admin_note}\n"
+                f"🚨 <b>{user_name}</b> исчерпал все очки (0/{config.initial_points}) и отправлен в мут на <b>{config.zero_points_mute_hours} {zero_word}</b> за постоянный спам ({spam_reason})!{admin_note}\n"
                 f"Очки восстановлены до {config.initial_points}.",
                 parse_mode=ParseMode.HTML,
             )
@@ -215,13 +216,14 @@ async def process_chat_message(message: types.Message, bot: Bot):
             )
             await db.reset_points(chat_id, user_id)
 
+            zero_word = "часа" if config.zero_points_mute_hours in (2, 3, 4) else "часов"
             admin_note = (
-                "\n<i>(Для участников с правами админа активен режим автоудаления сообщений на 24 часа)</i>"
+                f"\n<i>(Для участников с правами админа активен режим автоудаления сообщений на {config.zero_points_mute_hours} {zero_word})</i>"
                 if is_virt
                 else ""
             )
             await message.answer(
-                f"🚨 <b>{user_name}</b> исчерпал все очки (0/{config.initial_points}) и отправлен в мут на <b>{config.zero_points_mute_hours} часов</b> за нецензурную брань!{admin_note}\n"
+                f"🚨 <b>{user_name}</b> исчерпал все очки (0/{config.initial_points}) и отправлен в мут на <b>{config.zero_points_mute_hours} {zero_word}</b> за нецензурную брань!{admin_note}\n"
                 f"Очки восстановлены до {config.initial_points}.",
                 parse_mode=ParseMode.HTML,
             )
