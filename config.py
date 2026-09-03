@@ -36,7 +36,14 @@ except ImportError:
 
 @dataclass
 class Config:
-    bot_token: str = field(default_factory=lambda: os.getenv("BOT_TOKEN", ""))
+    bot_token: str = field(
+        default_factory=lambda: (
+            os.getenv("BOT_TOKEN")
+            or os.getenv("TOKEN")
+            or os.getenv("TELEGRAM_BOT_TOKEN")
+            or ""
+        ).strip()
+    )
     initial_points: int = field(
         default_factory=lambda: int(os.getenv("INITIAL_POINTS", "10"))
     )
