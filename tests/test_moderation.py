@@ -177,6 +177,24 @@ def test_database():
             is_muted, _ = await test_db.is_user_muted(chat_id, user_id)
             assert not is_muted, "После размута статус мута должен быть снят"
 
+            # Проверка серии чистых сообщений (25 сообщений -> +1 балл)
+            for i in range(24):
+                is_rewarded, pts, count = await test_db.record_clean_message(chat_id, user_id, reward_step=25)
+                assert not is_rewarded, f"На шаге {i+1} награда еще не должна выдаваться"
+                assert count == i + 1
+
+            # 25-е чистое сообщение -> получаем +1 очко!
+            is_rewarded, pts, count = await test_db.record_clean_message(chat_id, user_id, reward_step=25)
+            assert is_rewarded, "На 25-м сообщении должна быть выдана награда"
+            assert pts == 11, f"Очки должны увеличиться до 11, получено: {pts}"
+            assert count == 0, "Счетчик должен сброситься в 0"
+
+            # Проверка сброса серии при нарушении
+            await test_db.record_clean_message(chat_id, user_id, reward_step=25)
+            await test_db.reset_clean_messages(chat_id, user_id)
+            user_check = await test_db.get_or_create_user(chat_id, user_id, "ivan_test", "Иван")
+            assert user_check["clean_messages_count"] == 0, "Счетчик чистых сообщений должен быть 0 после сброса"
+
         asyncio.run(run_db_tests())
     print("✅ Тест базы данных успешно пройден!")
 

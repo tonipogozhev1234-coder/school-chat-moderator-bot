@@ -52,7 +52,8 @@ async def cmd_rules(message: types.Message):
         f"2️⃣ <b>Мат запрещён</b> — штраф <b>-{config.mat_penalty} очко</b> за каждое матное слово.\n"
         f"3️⃣ <b>Спам и флуд запрещены</b> — штраф <b>-{config.spam_penalty} очко</b>.\n"
         f"4️⃣ <b>Оскорбления участников</b> — немедленный <b>МУТ НА {config.insult_mute_hours} ЧАСА</b>!\n"
-        f"5️⃣ Если баланс очков падает до <b>0</b> — автоматический <b>МУТ НА {config.zero_points_mute_hours} {zero_word.upper()}</b>, после чего баланс восстанавливается до {config.initial_points}.\n\n"
+        f"5️⃣ Если баланс очков падает до <b>0</b> — автоматический <b>МУТ НА {config.zero_points_mute_hours} {zero_word.upper()}</b>, после чего баланс восстанавливается до {config.initial_points}.\n"
+        f"6️⃣ 🎁 <b>Бонус вежливости:</b> за каждые <b>{config.clean_messages_reward_step} сообщений подряд без мата</b> начисляется <b>+{config.clean_messages_reward_points} балл</b> к балансу!\n\n"
         "💡 <i>Проверить свои очки:</i> <code>/score</code>\n"
         "🏆 <i>Таблица очков участников:</i> <code>/top</code>"
     )
@@ -77,12 +78,14 @@ async def cmd_score(message: types.Message):
     points = user_data["points"]
     warnings = user_data["warnings_count"]
     mutes = user_data["mutes_count"]
+    clean_count = user_data.get("clean_messages_count", 0) or 0
 
     status_icon = "🟢" if points >= 7 else ("🟡" if points >= 4 else "🔴")
 
     reply_text = (
         f"📊 <b>Статистика участника {user.first_name}:</b>\n\n"
         f"{status_icon} Текущие очки: <b>{points}/{config.initial_points}</b>\n"
+        f"📈 Сообщений без мата подряд: <b>{clean_count}/{config.clean_messages_reward_step}</b> (до +{config.clean_messages_reward_points} балла)\n"
         f"⚠️ Нарушений зафиксировано: <b>{warnings}</b>\n"
         f"🤐 Количество мутов: <b>{mutes}</b>"
     )

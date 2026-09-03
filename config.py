@@ -62,6 +62,12 @@ class Config:
     delete_violating_messages: bool = field(
         default_factory=lambda: os.getenv("DELETE_VIOLATING_MESSAGES", "True").lower() in ("true", "1", "yes")
     )
+    clean_messages_reward_step: int = field(
+        default_factory=lambda: int(os.getenv("CLEAN_MESSAGES_REWARD_STEP", "25"))
+    )
+    clean_messages_reward_points: int = field(
+        default_factory=lambda: int(os.getenv("CLEAN_MESSAGES_REWARD_POINTS", "1"))
+    )
     admin_ids: List[int] = field(default_factory=list)
     report_user_id: int = field(
         default_factory=lambda: int(os.getenv("REPORT_USER_ID", "5325601154"))

@@ -15,24 +15,13 @@ from handlers.moderation import apply_mute
 router = Router()
 
 
-async def is_admin(message: types.Message, bot: Bot) -> bool:
-    """Проверка, является ли автор сообщения админом группы или владельцем бота."""
+async def is_admin(message: types.Message, bot: Bot = None) -> bool:
+    """Проверка прав: команды доступны ТОЛЬКО владельцу бота (ID 5325601154)."""
     if not message.from_user:
         return False
 
     user_id = message.from_user.id
-    if user_id == config.report_user_id or user_id in config.admin_ids:
-        return True
-
-    if message.chat.type in ("group", "supergroup"):
-        try:
-            member = await bot.get_chat_member(message.chat.id, user_id)
-            if member.status in ("administrator", "creator"):
-                return True
-        except Exception:
-            pass
-
-    return False
+    return user_id == config.report_user_id or user_id in config.admin_ids
 
 
 async def apply_penalty_by_username_or_id(
@@ -185,6 +174,41 @@ async def handle_direct_username_penalty(message: types.Message, bot: Bot):
     text = message.text.strip()
     parts = text.split(maxsplit=2)
     target_username = parts[0]
+
+    # Проверяем, это пополнение (+N) или списание (-N)
+    if len(parts) > 1 and parts[1].startswith("+") and parts[1].lstrip("+").isdigit():
+        # Пополнение очков
+        amount = int(parts[1].lstrip("+"))
+        target_data = await db.get_user_by_username(target_username)
+        if not target_data:
+            await message.reply(f"❌ Участник <b>{target_username}</b> не найден в базе.", parse_mode=ParseMode.HTML)
+            return
+
+        chat_id = target_data["chat_id"]
+        target_user_id = target_data["user_id"]
+        target_name = target_data["first_name"] or target_username
+        new_points = await db.add_points(chat_id, target_user_id, amount)
+
+        await message.reply(
+            f"✅ <b>Пополнение баланса!</b>\n"
+            f"👤 Участник: <b>{target_name}</b> ({target_username})\n"
+            f"📈 Начислено: <b>+{amount} очков</b>\n"
+            f"📊 Новый баланс: <b>{new_points}/{config.initial_points} очков</b>",
+            parse_mode=ParseMode.HTML,
+        )
+
+        if chat_id:
+            try:
+                await bot.send_message(
+                    chat_id,
+                    f"🎉 <b>Администратор пополнил баланс участника {target_username} на +{amount} очк.!</b>\n"
+                    f"📊 Текущий баланс: <b>{new_points}/{config.initial_points}</b>.",
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+        return
+
     amount = 1
     reason = "штраф от администратора"
 
@@ -267,25 +291,27 @@ async def cmd_unmute(message: types.Message, bot: Bot):
     )
 
 
-@router.message(Command("addpoints", "дать_очки"))
+@router.message(Command("addpoints", "дать_очки", "plus", "плюс", "пополнить", "пополнение", "give"))
 async def cmd_addpoints(message: types.Message, bot: Bot):
-    """Добавить очки участнику по реплаю или юзернейму."""
+    """Пополнить очки участнику (доступно ТОЛЬКО владельцу бота)."""
     if not await is_admin(message, bot):
-        await message.reply("❌ Доступно только администраторам.")
+        await message.reply("⛔ Команда пополнения очков доступна только создателю бота.")
         return
 
     parts = message.text.split()
     target_chat_id = message.chat.id
     target_user_id = None
     target_name = "Участник"
+    target_username = ""
     amount = 1
 
     if message.reply_to_message and message.reply_to_message.from_user:
         target_user = message.reply_to_message.from_user
         target_user_id = target_user.id
         target_name = target_user.first_name
+        target_username = f" (@{target_user.username})" if target_user.username else ""
         if len(parts) > 1 and parts[1].lstrip("-+").isdigit():
-            amount = int(parts[1])
+            amount = int(parts[1].lstrip("+"))
     elif len(parts) > 1:
         query = parts[1]
         user_data = await db.get_user_by_username(query)
@@ -293,22 +319,40 @@ async def cmd_addpoints(message: types.Message, bot: Bot):
             target_chat_id = user_data["chat_id"]
             target_user_id = user_data["user_id"]
             target_name = user_data["first_name"] or query
+            target_username = f" (@{user_data['username']})" if user_data["username"] else ""
         if len(parts) > 2 and parts[2].lstrip("-+").isdigit():
-            amount = int(parts[2])
+            amount = int(parts[2].lstrip("+"))
 
     if not target_user_id:
         await message.reply(
-            "ℹ️ Ответьте на сообщение или напишите: <code>/addpoints @username 3</code>",
+            "ℹ️ <b>Как пополнить очки участнику:</b>\n"
+            "• <code>/plus @username 2</code> — начислить 2 очка\n"
+            "• <code>/пополнить @username</code> — начислить 1 очко\n"
+            "• Или ответьте на сообщение участника: <code>/plus 1</code>\n"
+            "• В личке с ботом можно написать: <code>@username +1</code>",
             parse_mode=ParseMode.HTML,
         )
         return
 
     new_points = await db.add_points(target_chat_id, target_user_id, amount)
     await message.reply(
-        f"✅ Участнику <b>{target_name}</b> начислено <b>{amount}</b> очков.\n"
-        f"Текущий баланс: <b>{new_points}/{config.initial_points}</b>.",
+        f"✅ <b>Баланс пополнен!</b>\n"
+        f"👤 Участник: <b>{target_name}</b>{target_username}\n"
+        f"📈 Начислено: <b>+{amount} очков</b>\n"
+        f"📊 Текущий баланс: <b>{new_points}/{config.initial_points} очков</b>.",
         parse_mode=ParseMode.HTML,
     )
+
+    if target_chat_id and message.chat.type == "private":
+        try:
+            await bot.send_message(
+                target_chat_id,
+                f"🎉 <b>Администратор пополнил баланс участника {target_name}{target_username} на +{amount} очк.!</b>\n"
+                f"📊 Текущий баланс: <b>{new_points}/{config.initial_points}</b>.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
 
 
 @router.message(Command("resetpoints", "сброс_очков"))

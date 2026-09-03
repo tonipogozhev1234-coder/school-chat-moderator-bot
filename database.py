@@ -40,6 +40,7 @@ class Database:
                     points INTEGER DEFAULT 10,
                     warnings_count INTEGER DEFAULT 0,
                     mutes_count INTEGER DEFAULT 0,
+                    clean_messages_count INTEGER DEFAULT 0,
                     muted_until TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -51,6 +52,12 @@ class Database:
                 cursor.execute("ALTER TABLE users ADD COLUMN muted_until TEXT")
             except sqlite3.OperationalError:
                 pass  # Колонка уже существует
+
+            # Миграция: добавляем clean_messages_count (счетчик сообщений без мата)
+            try:
+                cursor.execute("ALTER TABLE users ADD COLUMN clean_messages_count INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
             # Таблица журнала нарушений
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS violations (
@@ -98,8 +105,8 @@ class Database:
             # Создаем нового участника со стартовыми очками
             cursor.execute(
                 """INSERT INTO users 
-                   (chat_id, user_id, username, first_name, points, warnings_count, mutes_count, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)""",
+                   (chat_id, user_id, username, first_name, points, warnings_count, mutes_count, clean_messages_count, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?)""",
                 (chat_id, user_id, username, first_name, default_points, now_str, now_str),
             )
             conn.commit()
@@ -209,6 +216,69 @@ class Database:
 
     async def reset_points(self, chat_id: int, user_id: int) -> int:
         return await asyncio.to_thread(self._reset_points_sync, chat_id, user_id, config.initial_points)
+
+    def _record_clean_message_sync(
+        self, chat_id: int, user_id: int, reward_step: int = 25, reward_points: int = 1
+    ) -> Tuple[bool, int, int]:
+        """
+        Увеличивает счетчик чистых сообщений на 1.
+        Если достигнуто reward_step (25), начисляет reward_points (+1 балл), сбрасывает счетчик.
+        Возвращает: (is_rewarded: bool, new_points: int, current_clean_count: int)
+        """
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE users 
+                   SET clean_messages_count = COALESCE(clean_messages_count, 0) + 1, updated_at = ? 
+                   WHERE chat_id = ? AND user_id = ?""",
+                (now_str, chat_id, user_id),
+            )
+            conn.commit()
+
+            cursor.execute(
+                "SELECT points, clean_messages_count FROM users WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False, config.initial_points, 0
+
+            clean_count = row["clean_messages_count"]
+            current_points = row["points"]
+
+            if clean_count >= reward_step:
+                new_points = current_points + reward_points
+                cursor.execute(
+                    """UPDATE users 
+                       SET points = ?, clean_messages_count = 0, updated_at = ? 
+                       WHERE chat_id = ? AND user_id = ?""",
+                    (new_points, now_str, chat_id, user_id),
+                )
+                conn.commit()
+                return True, new_points, 0
+
+            return False, current_points, clean_count
+
+    async def record_clean_message(
+        self, chat_id: int, user_id: int, reward_step: int = 25, reward_points: int = 1
+    ) -> Tuple[bool, int, int]:
+        return await asyncio.to_thread(
+            self._record_clean_message_sync, chat_id, user_id, reward_step, reward_points
+        )
+
+    def _reset_clean_messages_sync(self, chat_id: int, user_id: int) -> None:
+        """Сбрасывает серию чистых сообщений при нарушении."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET clean_messages_count = 0 WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            conn.commit()
+
+    async def reset_clean_messages(self, chat_id: int, user_id: int) -> None:
+        await asyncio.to_thread(self._reset_clean_messages_sync, chat_id, user_id)
 
     def _record_violation_sync(
         self, chat_id: int, user_id: int, violation_type: str, details: str, points_deducted: int
