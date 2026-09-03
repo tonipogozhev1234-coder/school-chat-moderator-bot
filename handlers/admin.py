@@ -3,14 +3,17 @@
 Поддержка штрафов и списания очков по юзернейму (@username) прямо в ЛС с ботом.
 """
 
+import html
 from typing import Optional
 from aiogram import Router, types, Bot, F
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
+from aiogram.types import BufferedInputFile
 
 from config import config
 from database import db
 from handlers.moderation import apply_mute
+from utils.screenshot import create_single_message_screenshot, fetch_user_avatar_bytes
 
 router = Router()
 
@@ -186,14 +189,14 @@ async def handle_direct_username_penalty(message: types.Message, bot: Bot):
 
         chat_id = target_data["chat_id"]
         target_user_id = target_data["user_id"]
-        target_name = target_data["first_name"] or target_username
-        new_points = await db.add_points(chat_id, target_user_id, amount)
+        new_points = await db.add_points(chat_id, target_user_id, amount, max_points=config.max_points)
+        limit_note = " (максимум)" if new_points >= config.max_points else f" (из {config.max_points})"
 
         await message.reply(
             f"✅ <b>Пополнение баланса!</b>\n"
             f"👤 Участник: <b>{target_name}</b> ({target_username})\n"
             f"📈 Начислено: <b>+{amount} очков</b>\n"
-            f"📊 Новый баланс: <b>{new_points} очков</b>",
+            f"📊 Новый баланс: <b>{new_points} очков{limit_note}</b>",
             parse_mode=ParseMode.HTML,
         )
 
@@ -334,12 +337,13 @@ async def cmd_addpoints(message: types.Message, bot: Bot):
         )
         return
 
-    new_points = await db.add_points(target_chat_id, target_user_id, amount)
+    new_points = await db.add_points(target_chat_id, target_user_id, amount, max_points=config.max_points)
+    limit_note = " (максимальный лимит)" if new_points >= config.max_points else f" (из {config.max_points})"
     await message.reply(
         f"✅ <b>Баланс пополнен!</b>\n"
         f"👤 Участник: <b>{target_name}</b>{target_username}\n"
         f"📈 Начислено: <b>+{amount} очков</b>\n"
-        f"📊 Текущий баланс: <b>{new_points} очков</b>.",
+        f"📊 Текущий баланс: <b>{new_points} очков{limit_note}</b>.",
         parse_mode=ParseMode.HTML,
     )
 
@@ -391,3 +395,123 @@ async def cmd_resetpoints(message: types.Message, bot: Bot):
         f"🔄 Очки участника <b>{target_name}</b> сброшены до стандартных <b>{new_points}</b>.",
         parse_mode=ParseMode.HTML,
     )
+
+
+@router.message(Command("proof", "пруф", "пруфы", "доказательства", "докажи", "доказательство"))
+async def cmd_proof(message: types.Message, bot: Bot):
+    """
+    Получить скриншот-доказательство нарушения для отправки сомневающимся.
+    Использование:
+    • /proof @username — скриншот последнего нарушения пользователя
+    • /proof 12 — скриншот конкретного нарушения по номеру (ID)
+    • Ответом на сообщение нарушителя: /proof
+    """
+    if not await is_admin(message, bot):
+        await message.reply("⛔ Просмотр доказательств доступен только администраторам.")
+        return
+
+    parts = message.text.split()
+    # 1. Если указан конкретный номер нарушения: /proof 15
+    if len(parts) > 1 and parts[1].isdigit():
+        violation_id = int(parts[1])
+        v = await db.get_violation_by_id(violation_id)
+        if not v:
+            await message.reply(f"❌ Нарушение #{violation_id} не найдено.")
+            return
+
+        text = v.get("full_text") or v.get("details") or "(без текста)"
+        u_name = v.get("first_name") or v.get("username") or "Участник"
+        u_id = v.get("user_id") or 0
+        v_type = v.get("violation_type", "нарушение").upper()
+        v_matched = v.get("matched_word") or v.get("details") or ""
+        created_at_raw = v.get("created_at") or ""
+        time_str = created_at_raw[11:16] if len(created_at_raw) >= 16 else "12:00"
+
+        avatar_bytes = await fetch_user_avatar_bytes(bot, u_id)
+        img_buf = create_single_message_screenshot(
+            user_name=u_name,
+            user_id=u_id,
+            text=text,
+            time_str=time_str,
+            avatar_bytes=avatar_bytes,
+        )
+
+        caption = (
+            f"📸 <b>Доказательство нарушения #{violation_id}</b>\n\n"
+            f"👤 <b>Нарушитель:</b> {html.escape(u_name)} (ID: <code>{u_id}</code>)\n"
+            f"⚠️ <b>Тип:</b> {v_type}\n"
+            f"🔍 <b>Зафиксировано:</b> <code>{html.escape(v_matched)}</code>\n"
+            f"🕒 <b>Время:</b> {html.escape(created_at_raw[:19].replace('T', ' '))}"
+        )
+        if img_buf:
+            photo = BufferedInputFile(img_buf.read(), filename=f"proof_{violation_id}.png")
+            await message.reply_photo(photo=photo, caption=caption, parse_mode=ParseMode.HTML)
+        else:
+            await message.reply(caption, parse_mode=ParseMode.HTML)
+        return
+
+    # 2. Поиск по пользователю (@username или ответ на сообщение)
+    target_user_id = None
+    target_name = "Участник"
+
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target_user = message.reply_to_message.from_user
+        target_user_id = target_user.id
+        target_name = target_user.first_name
+    elif len(parts) > 1:
+        query = parts[1]
+        user_data = await db.get_user_by_username(query)
+        if user_data:
+            target_user_id = user_data["user_id"]
+            target_name = user_data["first_name"] or query
+        elif query.isdigit():
+            target_user_id = int(query)
+
+    if not target_user_id:
+        await message.reply(
+            "ℹ️ <b>Как получить доказательства:</b>\n"
+            "• <code>/proof @username</code> — скриншот последнего нарушения\n"
+            "• <code>/proof [ID]</code> — скриншот конкретного нарушения по ID\n"
+            "• Или ответьте командой <code>/proof</code> на сообщение нарушителя.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    violations = await db.get_user_violations(target_user_id, limit=5)
+    if not violations:
+        await message.reply(
+            f"ℹ️ Для участника <b>{html.escape(target_name)}</b> нарушений в базе не найдено.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    latest = violations[0]
+    text = latest.get("full_text") or latest.get("details") or "(без текста)"
+    v_type = latest.get("violation_type", "нарушение").upper()
+    v_matched = latest.get("matched_word") or latest.get("details") or ""
+    v_id = latest.get("id")
+    created_at_raw = latest.get("created_at") or ""
+    time_str = created_at_raw[11:16] if len(created_at_raw) >= 16 else "12:00"
+
+    avatar_bytes = await fetch_user_avatar_bytes(bot, target_user_id)
+    img_buf = create_single_message_screenshot(
+        user_name=target_name,
+        user_id=target_user_id,
+        text=text,
+        time_str=time_str,
+        avatar_bytes=avatar_bytes,
+    )
+
+    caption = (
+        f"📸 <b>Скриншот последнего нарушения #{v_id}</b>\n\n"
+        f"👤 <b>Нарушитель:</b> {html.escape(target_name)} (ID: <code>{target_user_id}</code>)\n"
+        f"⚠️ <b>Тип:</b> {v_type}\n"
+        f"🔍 <b>Зафиксировано:</b> <code>{html.escape(v_matched)}</code>\n"
+        f"🕒 <b>Время:</b> {html.escape(created_at_raw[:19].replace('T', ' '))}\n\n"
+        f"<i>Всего зафиксировано нарушений: {len(violations)}</i>"
+    )
+    if img_buf:
+        photo = BufferedInputFile(img_buf.read(), filename=f"proof_{v_id}.png")
+        await message.reply_photo(photo=photo, caption=caption, parse_mode=ParseMode.HTML)
+    else:
+        await message.reply(caption, parse_mode=ParseMode.HTML)

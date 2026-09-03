@@ -145,14 +145,14 @@ def test_database():
             # Запись нарушения
             await test_db.record_violation(chat_id, user_id, "mat", "бля", 1)
 
-            # Добавление очков
+            # Добавление очков с проверкой лимита 10
             points = await test_db.add_points(chat_id, user_id, 3)
-            assert points == 12
+            assert points == 10, f"Очки не должны превышать лимит 10, получено: {points}"
 
             # Лидерборд
             board = await test_db.get_chat_leaderboard(chat_id)
             assert len(board) == 1
-            assert board[0]["points"] == 12
+            assert board[0]["points"] == 10
 
             # Сброс
             points = await test_db.reset_points(chat_id, user_id)
@@ -177,27 +177,68 @@ def test_database():
             is_muted, _ = await test_db.is_user_muted(chat_id, user_id)
             assert not is_muted, "После размута статус мута должен быть снят"
 
+            # Проверка списания очков
+            await test_db.deduct_points(chat_id, user_id, 2)
+            user_check = await test_db.get_or_create_user(chat_id, user_id, "ivan_test", "Иван")
+            assert user_check["points"] == 8, "После списания 2 очков должно остаться 8"
+
             # Проверка серии чистых сообщений (25 сообщений -> +1 балл)
             for i in range(24):
                 is_rewarded, pts, count = await test_db.record_clean_message(chat_id, user_id, reward_step=25)
                 assert not is_rewarded, f"На шаге {i+1} награда еще не должна выдаваться"
                 assert count == i + 1
 
-            # 25-е чистое сообщение -> получаем +1 очко!
+            # 25-е чистое сообщение -> получаем +1 очко (было 8, стало 9)
             is_rewarded, pts, count = await test_db.record_clean_message(chat_id, user_id, reward_step=25)
             assert is_rewarded, "На 25-м сообщении должна быть выдана награда"
-            assert pts == 11, f"Очки должны увеличиться до 11, получено: {pts}"
+            assert pts == 9, f"Очки должны увеличиться до 9, получено: {pts}"
             assert count == 0, "Счетчик должен сброситься в 0"
 
-            # Проверка, что чистые сообщения продолжают накапливаться не подряд
+            # Проверка лимита в максимум 10 очков (нельзя больше 10)
+            pts = await test_db.add_points(chat_id, user_id, amount=5, max_points=10)
+            assert pts == 10, f"Очки не должны превышать 10, получено: {pts}"
+
+            # Проверка сохранения и получения доказательства нарушения
+            v_id = await test_db.record_violation(
+                chat_id=chat_id,
+                user_id=user_id,
+                violation_type="mat",
+                details="бля",
+                points_deducted=1,
+                full_text="да бля ты достал уже",
+                username="ivan_test",
+                first_name="Иван",
+                chat_title="8E класс",
+                matched_word="бля",
+            )
+            v = await test_db.get_violation_by_id(v_id)
+            assert v is not None, "Нарушение должно сохраняться в БД"
+            assert v["matched_word"] == "бля"
+            assert v["full_text"] == "да бля ты достал уже"
+
+            # Проверка, что нарушение не сбрасывает счетчик чистых сообщений (не подряд)
             await test_db.record_clean_message(chat_id, user_id, reward_step=25)
-            # Нарушение (запись в журнал) не сбрасывает счетчик чистых сообщений
-            await test_db.record_violation(chat_id, user_id, "mat", "бля", 1)
             user_check = await test_db.get_or_create_user(chat_id, user_id, "ivan_test", "Иван")
-            assert user_check["clean_messages_count"] == 1, "Счетчик чистых сообщений не должен сбрасываться при нарушении!"
+            assert user_check["clean_messages_count"] == 1, "Счетчик чистых сообщений не должен сбрасываться"
 
         asyncio.run(run_db_tests())
-    print("✅ Тест базы данных успешно пройден!")
+    print("✅ Тест базы данных и лимита 10 очков успешно пройден!")
+
+
+def test_screenshot():
+    """Тест генерации скриншота отдельного сообщения."""
+    from utils.screenshot import create_single_message_screenshot
+    buf = create_single_message_screenshot(
+        user_name="Иван Иванов",
+        user_id=12345678,
+        text="Привет, это тестовое доказательство нарушения!",
+        time_str="23:30",
+    )
+    assert buf is not None, "Скриншот не должен быть None"
+    data = buf.read()
+    assert len(data) > 1000, "Файл скриншота слишком мал"
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", "Файл должен быть валидным PNG"
+    print("✅ Тест чистого скриншота сообщения успешно пройден!")
 
 
 if __name__ == "__main__":
@@ -207,4 +248,5 @@ if __name__ == "__main__":
     test_insult_detection()
     test_spam_detection()
     test_database()
+    test_screenshot()
     print("\n🎉 ВСЕ ТЕСТЫ УСПЕШНО ПРОЙДЕНЫ!")

@@ -48,12 +48,12 @@ async def cmd_rules(message: types.Message):
     zero_word = "часа" if config.zero_points_mute_hours in (2, 3, 4) else "часов"
     text = (
         "📜 <b>ПРАВИЛА НАШЕГО КЛАССНОГО ЧАТА:</b>\n\n"
-        f"1️⃣ Каждому участнику на старте даётся <b>{config.initial_points} очков</b>.\n"
+        f"1️⃣ Каждому участнику на старте даётся <b>{config.initial_points} очков</b> (максимум: <b>{config.max_points}</b>).\n"
         f"2️⃣ <b>Мат запрещён</b> — штраф <b>-{config.mat_penalty} очко</b> за каждое матное слово.\n"
         f"3️⃣ <b>Спам и флуд запрещены</b> — штраф <b>-{config.spam_penalty} очко</b>.\n"
         f"4️⃣ <b>Оскорбления участников</b> — немедленный <b>МУТ НА {config.insult_mute_hours} ЧАСА</b>!\n"
         f"5️⃣ Если баланс очков падает до <b>0</b> — автоматический <b>МУТ НА {config.zero_points_mute_hours} {zero_word.upper()}</b>, после чего баланс восстанавливается до {config.initial_points}.\n"
-        f"6️⃣ 🎁 <b>Бонус вежливости:</b> за каждые <b>{config.clean_messages_reward_step} сообщений без мата</b> начисляется <b>+{config.clean_messages_reward_points} балл</b> к балансу!\n\n"
+        f"6️⃣ 🎁 <b>Бонус вежливости:</b> за каждые <b>{config.clean_messages_reward_step} сообщений без мата</b> начисляется <b>+{config.clean_messages_reward_points} балл</b> (максимум до {config.max_points} баллов)!\n\n"
         "💡 <i>Проверить свои очки:</i> <code>/score</code>\n"
         "🏆 <i>Таблица очков участников:</i> <code>/top</code>"
     )

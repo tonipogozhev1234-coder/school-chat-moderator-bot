@@ -47,6 +47,9 @@ class Config:
     initial_points: int = field(
         default_factory=lambda: int(os.getenv("INITIAL_POINTS", "10"))
     )
+    max_points: int = field(
+        default_factory=lambda: int(os.getenv("MAX_POINTS", "10"))
+    )
     mat_penalty: int = field(
         default_factory=lambda: int(os.getenv("MAT_PENALTY", "1"))
     )

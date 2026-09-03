@@ -67,9 +67,19 @@ class Database:
                     violation_type TEXT NOT NULL,
                     details TEXT,
                     points_deducted INTEGER DEFAULT 0,
+                    full_text TEXT,
+                    username TEXT,
+                    first_name TEXT,
+                    chat_title TEXT,
+                    matched_word TEXT,
                     created_at TEXT NOT NULL
                 )
             """)
+            for col in ("full_text TEXT", "username TEXT", "first_name TEXT", "chat_title TEXT", "matched_word TEXT"):
+                try:
+                    cursor.execute(f"ALTER TABLE violations ADD COLUMN {col}")
+                except sqlite3.OperationalError:
+                    pass
             conn.commit()
 
     async def init_db(self) -> None:
@@ -174,15 +184,15 @@ class Database:
     async def deduct_points(self, chat_id: int, user_id: int, amount: int = 1) -> int:
         return await asyncio.to_thread(self._deduct_points_sync, chat_id, user_id, amount)
 
-    def _add_points_sync(self, chat_id: int, user_id: int, amount: int) -> int:
+    def _add_points_sync(self, chat_id: int, user_id: int, amount: int, max_points: int = 10) -> int:
         now_str = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """UPDATE users 
-                   SET points = points + ?, updated_at = ? 
+                   SET points = MIN(points + ?, ?), updated_at = ? 
                    WHERE chat_id = ? AND user_id = ?""",
-                (amount, now_str, chat_id, user_id),
+                (amount, max_points, now_str, chat_id, user_id),
             )
             conn.commit()
             cursor.execute(
@@ -192,8 +202,9 @@ class Database:
             row = cursor.fetchone()
             return row["points"] if row else 0
 
-    async def add_points(self, chat_id: int, user_id: int, amount: int) -> int:
-        return await asyncio.to_thread(self._add_points_sync, chat_id, user_id, amount)
+    async def add_points(self, chat_id: int, user_id: int, amount: int, max_points: Optional[int] = None) -> int:
+        max_p = max_points if max_points is not None else config.max_points
+        return await asyncio.to_thread(self._add_points_sync, chat_id, user_id, amount, max_p)
 
     def _set_points_sync(self, chat_id: int, user_id: int, points: int) -> int:
         now_str = datetime.now(timezone.utc).isoformat()
@@ -218,11 +229,11 @@ class Database:
         return await asyncio.to_thread(self._reset_points_sync, chat_id, user_id, config.initial_points)
 
     def _record_clean_message_sync(
-        self, chat_id: int, user_id: int, reward_step: int = 25, reward_points: int = 1
+        self, chat_id: int, user_id: int, reward_step: int = 25, reward_points: int = 1, max_points: int = 10
     ) -> Tuple[bool, int, int]:
         """
         Увеличивает счетчик чистых сообщений на 1.
-        Если достигнуто reward_step (25), начисляет reward_points (+1 балл), сбрасывает счетчик.
+        Если достигнуто reward_step (25), начисляет reward_points (+1 балл) с ограничением до 10 очков.
         Возвращает: (is_rewarded: bool, new_points: int, current_clean_count: int)
         """
         now_str = datetime.now(timezone.utc).isoformat()
@@ -248,7 +259,8 @@ class Database:
             current_points = row["points"]
 
             if clean_count >= reward_step:
-                new_points = current_points + reward_points
+                # Ограничение максимума в 10 очков
+                new_points = min(current_points + reward_points, max_points)
                 rem_clean = clean_count - reward_step
                 cursor.execute(
                     """UPDATE users 
@@ -262,10 +274,11 @@ class Database:
             return False, current_points, clean_count
 
     async def record_clean_message(
-        self, chat_id: int, user_id: int, reward_step: int = 25, reward_points: int = 1
+        self, chat_id: int, user_id: int, reward_step: int = 25, reward_points: int = 1, max_points: Optional[int] = None
     ) -> Tuple[bool, int, int]:
+        max_p = max_points if max_points is not None else config.max_points
         return await asyncio.to_thread(
-            self._record_clean_message_sync, chat_id, user_id, reward_step, reward_points
+            self._record_clean_message_sync, chat_id, user_id, reward_step, reward_points, max_p
         )
 
     def _reset_clean_messages_sync(self, chat_id: int, user_id: int) -> None:
@@ -282,25 +295,90 @@ class Database:
         await asyncio.to_thread(self._reset_clean_messages_sync, chat_id, user_id)
 
     def _record_violation_sync(
-        self, chat_id: int, user_id: int, violation_type: str, details: str, points_deducted: int
-    ) -> None:
+        self,
+        chat_id: int,
+        user_id: int,
+        violation_type: str,
+        details: str,
+        points_deducted: int,
+        full_text: Optional[str] = None,
+        username: Optional[str] = None,
+        first_name: Optional[str] = None,
+        chat_title: Optional[str] = None,
+        matched_word: Optional[str] = None,
+    ) -> int:
         now_str = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """INSERT INTO violations 
-                   (chat_id, user_id, violation_type, details, points_deducted, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (chat_id, user_id, violation_type, details, points_deducted, now_str),
+                   (chat_id, user_id, violation_type, details, points_deducted, full_text, username, first_name, chat_title, matched_word, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    chat_id,
+                    user_id,
+                    violation_type,
+                    details,
+                    points_deducted,
+                    full_text or details,
+                    username,
+                    first_name,
+                    chat_title,
+                    matched_word,
+                    now_str,
+                ),
             )
             conn.commit()
+            return cursor.lastrowid
 
     async def record_violation(
-        self, chat_id: int, user_id: int, violation_type: str, details: str = "", points_deducted: int = 0
-    ) -> None:
-        await asyncio.to_thread(
-            self._record_violation_sync, chat_id, user_id, violation_type, details, points_deducted
+        self,
+        chat_id: int,
+        user_id: int,
+        violation_type: str,
+        details: str = "",
+        points_deducted: int = 0,
+        full_text: Optional[str] = None,
+        username: Optional[str] = None,
+        first_name: Optional[str] = None,
+        chat_title: Optional[str] = None,
+        matched_word: Optional[str] = None,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._record_violation_sync,
+            chat_id,
+            user_id,
+            violation_type,
+            details,
+            points_deducted,
+            full_text,
+            username,
+            first_name,
+            chat_title,
+            matched_word,
         )
+
+    def _get_violation_by_id_sync(self, violation_id: int) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM violations WHERE id = ?", (violation_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_violation_by_id(self, violation_id: int) -> Optional[Dict[str, Any]]:
+        return await asyncio.to_thread(self._get_violation_by_id_sync, violation_id)
+
+    def _get_user_violations_sync(self, user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM violations WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+
+    async def get_user_violations(self, user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._get_user_violations_sync, user_id, limit)
 
     def _record_mute_sync(self, chat_id: int, user_id: int) -> None:
         with self._get_connection() as conn:

@@ -7,9 +7,10 @@
 - Контроль нулевого баланса очков (мут на 24 часа)
 """
 
+import io
 import html
 from datetime import datetime, timedelta, timezone
-from typing import Tuple
+from typing import Tuple, Optional
 from aiogram import Router, types, Bot
 from aiogram.enums import ParseMode
 from aiogram.types import BufferedInputFile
@@ -19,7 +20,7 @@ from config import config
 from database import db
 from filters.text_filter import check_text_violation, ViolationType
 from filters.spam_detector import spam_detector
-from utils.screenshot import create_message_screenshot
+from utils.screenshot import create_single_message_screenshot, fetch_user_avatar_bytes
 
 router = Router()
 
@@ -30,9 +31,10 @@ async def send_violation_report(
     violation_type: str,
     matched_word: str,
     points_left: int,
+    violation_id: Optional[int] = None,
 ):
     """
-    Отправляет скриншот и отчет о нарушении всем администраторам (владельцу и доверенным админам).
+    Отправляет аутентичный скриншот сообщения и отчет о нарушении всем администраторам.
     """
     target_admin_ids = set()
     if config.report_user_id:
@@ -51,31 +53,33 @@ async def send_violation_report(
         username_str = f" (@{user.username})" if user and user.username else ""
         user_id = user.id if user else 0
         text = message.text or message.caption or "(без текста)"
+        time_str = message.date.strftime("%H:%M") if message.date else datetime.now().strftime("%H:%M")
 
-        # 1. Генерируем графический скриншот-карточку
+        # 1. Загружаем аватар пользователя для фото-скриншота
+        avatar_bytes = await fetch_user_avatar_bytes(bot, user_id)
+
+        # 2. Генерируем чистый скриншот отдельного сообщения Telegram
+        img_buf = create_single_message_screenshot(
+            user_name=user_name,
+            user_id=user_id,
+            text=text,
+            time_str=time_str,
+            avatar_bytes=avatar_bytes,
+        )
+        photo_bytes = img_buf.read() if img_buf else None
+
+        # 3. Формируем текстовую карточку для описания
+        id_str = f" #{violation_id}" if violation_id else ""
         caption = (
-            f"📸 <b>Фиксация нарушения правил чата!</b>\n\n"
+            f"📸 <b>Скриншот-доказательство нарушения{id_str}</b>\n\n"
             f"🏫 <b>Чат:</b> {html.escape(chat_title)}\n"
             f"👤 <b>Нарушитель:</b> {html.escape(user_name)}{username_str} (ID: <code>{user_id}</code>)\n"
             f"⚠️ <b>Тип:</b> {violation_type.upper()}\n"
             f"🔍 <b>Зафиксировано:</b> <code>{html.escape(matched_word)}</code>\n"
-            f"📊 <b>Осталось очков:</b> <code>{points_left}</code>\n\n"
-            f"💬 <b>Текст:</b>\n"
-            f"<blockquote>{html.escape(text)}</blockquote>"
+            f"📊 <b>Осталось очков:</b> <code>{points_left}</code> (из {config.max_points})"
         )
 
-        img_buf = create_message_screenshot(
-            chat_title=chat_title,
-            user_name=user_name,
-            user_id=user_id,
-            text=text,
-            matched_word=matched_word,
-            violation_type=violation_type,
-            points_left=points_left,
-        )
-        photo_bytes = img_buf.read() if img_buf else None
-
-        # 2. Рассылаем каждому администратору
+        # 4. Рассылаем каждому администратору
         for admin_id in target_admin_ids:
             try:
                 await bot.forward_message(
@@ -88,7 +92,7 @@ async def send_violation_report(
 
             try:
                 if photo_bytes:
-                    photo = BufferedInputFile(photo_bytes, filename="violation_screenshot.png")
+                    photo = BufferedInputFile(photo_bytes, filename=f"proof_{violation_id or 'violation'}.png")
                     await bot.send_photo(
                         chat_id=admin_id,
                         photo=photo,
@@ -191,12 +195,17 @@ async def process_chat_message(message: types.Message, bot: Bot):
     # 1. ПРОВЕРКА НА ОСКОРБЛЕНИЯ (Высший приоритет -> Мут на 2 часа)
     violation, matched = check_text_violation(text)
     if violation == ViolationType.INSULT:
-        await db.record_violation(
+        v_id = await db.record_violation(
             chat_id=chat_id,
             user_id=user_id,
             violation_type="insult",
             details=matched or "",
             points_deducted=0,
+            full_text=text,
+            username=user.username,
+            first_name=user.first_name,
+            chat_title=message.chat.title or "Классный чат",
+            matched_word=matched or "",
         )
 
         if is_private:
@@ -207,8 +216,8 @@ async def process_chat_message(message: types.Message, bot: Bot):
             )
             return
 
-        # Отправляем скриншот и отчет администратору (5325601154) до удаления сообщения
-        await send_violation_report(bot, message, "оскорбление", matched or "", 0)
+        # Отправляем скриншот и отчет администраторам до удаления сообщения
+        await send_violation_report(bot, message, "оскорбление", matched or "", 0, v_id)
 
         # В группе: удаляем и накладываем мут
         if config.delete_violating_messages:
@@ -240,12 +249,17 @@ async def process_chat_message(message: types.Message, bot: Bot):
     is_spam, spam_reason = spam_detector.is_spam(chat_id, user_id, text)
     if is_spam:
         new_points = await db.deduct_points(chat_id, user_id, config.spam_penalty)
-        await db.record_violation(
+        v_id = await db.record_violation(
             chat_id=chat_id,
             user_id=user_id,
             violation_type="spam",
             details=spam_reason,
             points_deducted=config.spam_penalty,
+            full_text=text,
+            username=user.username,
+            first_name=user.first_name,
+            chat_title=message.chat.title or "Классный чат",
+            matched_word=spam_reason,
         )
 
         if is_private:
@@ -265,7 +279,7 @@ async def process_chat_message(message: types.Message, bot: Bot):
             return
 
         # Отправляем скриншот и отчет администраторам до удаления сообщения
-        await send_violation_report(bot, message, "спам", spam_reason, new_points)
+        await send_violation_report(bot, message, "спам", spam_reason, new_points, v_id)
 
         if config.delete_violating_messages:
             try:
@@ -306,12 +320,17 @@ async def process_chat_message(message: types.Message, bot: Bot):
     # 3. ПРОВЕРКА НА МАТ (-1 очко)
     if violation == ViolationType.MAT:
         new_points = await db.deduct_points(chat_id, user_id, config.mat_penalty)
-        await db.record_violation(
+        v_id = await db.record_violation(
             chat_id=chat_id,
             user_id=user_id,
             violation_type="mat",
             details=matched or "",
             points_deducted=config.mat_penalty,
+            full_text=text,
+            username=user.username,
+            first_name=user.first_name,
+            chat_title=message.chat.title or "Классный чат",
+            matched_word=matched or "",
         )
 
         if is_private:
@@ -332,7 +351,7 @@ async def process_chat_message(message: types.Message, bot: Bot):
             return
 
         # Отправляем скриншот и отчет администраторам до удаления сообщения
-        await send_violation_report(bot, message, "мат", matched or "", new_points)
+        await send_violation_report(bot, message, "мат", matched or "", new_points, v_id)
 
         if config.delete_violating_messages:
             try:
@@ -376,11 +395,17 @@ async def process_chat_message(message: types.Message, bot: Bot):
             user_id=user_id,
             reward_step=config.clean_messages_reward_step,
             reward_points=config.clean_messages_reward_points,
+            max_points=config.max_points,
         )
         if is_rewarded:
+            if new_points >= config.max_points:
+                bal_note = f"📊 Ваш баланс: <b>{new_points} очков (максимальный лимит)</b>."
+            else:
+                bal_note = f"📊 Текущий баланс: <b>{new_points} очков</b> (максимум {config.max_points}). Так держать!"
+
             await message.reply(
                 f"🎉 <b>{user_name}</b>, за каждые <b>{config.clean_messages_reward_step} сообщений без мата</b> "
                 f"вам начислен <b>+{config.clean_messages_reward_points} балл</b>!\n"
-                f"📊 Текущий баланс: <b>{new_points} очков</b>. Так держать!",
+                f"{bal_note}",
                 parse_mode=ParseMode.HTML,
             )
