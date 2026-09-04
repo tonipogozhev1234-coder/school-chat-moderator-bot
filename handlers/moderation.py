@@ -107,8 +107,45 @@ async def send_violation_report(
                     )
             except Exception as e:
                 print(f"[ERROR] Не удалось отправить скриншот администратору {admin_id}: {e}")
+
+        return photo_bytes
     except Exception as e:
         print(f"[ERROR] Ошибка генерации отчета о нарушении: {e}")
+        return None
+
+
+async def send_chat_violation_announcement(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    photo_bytes: Optional[bytes] = None,
+    filename: str = "proof.png",
+):
+    """
+    Отправляет уведомление о нарушении в чат группы вместе со скриншотом-доказательством,
+    чтобы ВСЕ участники чата видели зафиксированное нарушение (доказательства отправляются всем).
+    """
+    if photo_bytes:
+        try:
+            photo = BufferedInputFile(photo_bytes, filename=filename)
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo,
+                caption=text,
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        except Exception as e:
+            print(f"[WARN] Не удалось отправить фото в чат {chat_id}, отправляем текстом: {e}")
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as e:
+        print(f"[ERROR] Не удалось отправить сообщение в чат {chat_id}: {e}")
 
 
 
@@ -217,7 +254,7 @@ async def process_chat_message(message: types.Message, bot: Bot):
             return
 
         # Отправляем скриншот и отчет администраторам до удаления сообщения
-        await send_violation_report(bot, message, "оскорбление", matched or "", 0, v_id)
+        photo_bytes = await send_violation_report(bot, message, "оскорбление", matched or "", 0, v_id)
 
         # В группе: удаляем и накладываем мут
         if config.delete_violating_messages:
@@ -238,10 +275,16 @@ async def process_chat_message(message: types.Message, bot: Bot):
             if is_virt
             else ""
         )
-        await message.answer(
+        chat_text = (
             f"🤐 <b>{user_name}</b> отправлен в мут на <b>{config.insult_mute_hours} часа</b> за оскорбление!{admin_note}\n"
-            "💡 <i>Ведите себя вежливо и уважайте одноклассников.</i>",
-            parse_mode=ParseMode.HTML,
+            "💡 <i>Ведите себя вежливо и уважайте одноклассников.</i>"
+        )
+        await send_chat_violation_announcement(
+            bot=bot,
+            chat_id=chat_id,
+            text=chat_text,
+            photo_bytes=photo_bytes,
+            filename=f"proof_{v_id}.png",
         )
         return
 
@@ -279,7 +322,7 @@ async def process_chat_message(message: types.Message, bot: Bot):
             return
 
         # Отправляем скриншот и отчет администраторам до удаления сообщения
-        await send_violation_report(bot, message, "спам", spam_reason, new_points, v_id)
+        photo_bytes = await send_violation_report(bot, message, "спам", spam_reason, new_points, v_id)
 
         if config.delete_violating_messages:
             try:
@@ -304,17 +347,23 @@ async def process_chat_message(message: types.Message, bot: Bot):
                 if is_virt
                 else ""
             )
-            await message.answer(
+            chat_text = (
                 f"🚨 <b>{user_name}</b> исчерпал все очки (0) и отправлен в мут на <b>{config.zero_points_mute_hours} {zero_word}</b> за постоянный спам ({spam_reason})!{admin_note}\n"
-                f"Очки восстановлены до {config.initial_points}.",
-                parse_mode=ParseMode.HTML,
+                f"Очки восстановлены до {config.initial_points}."
             )
         else:
-            await message.answer(
+            chat_text = (
                 f"⚠️ <b>{user_name}</b>, спам запрещён ({spam_reason})!\n"
-                f"Штраф: <b>-{config.spam_penalty} очко</b>. Осталось очков: <b>{new_points}</b>.",
-                parse_mode=ParseMode.HTML,
+                f"Штраф: <b>-{config.spam_penalty} очко</b>. Осталось очков: <b>{new_points}</b> (из {config.max_points})."
             )
+
+        await send_chat_violation_announcement(
+            bot=bot,
+            chat_id=chat_id,
+            text=chat_text,
+            photo_bytes=photo_bytes,
+            filename=f"proof_{v_id}.png",
+        )
         return
 
     # 3. ПРОВЕРКА НА МАТ (-1 очко)
@@ -351,7 +400,7 @@ async def process_chat_message(message: types.Message, bot: Bot):
             return
 
         # Отправляем скриншот и отчет администраторам до удаления сообщения
-        await send_violation_report(bot, message, "мат", matched or "", new_points, v_id)
+        photo_bytes = await send_violation_report(bot, message, "мат", matched or "", new_points, v_id)
 
         if config.delete_violating_messages:
             try:
@@ -375,17 +424,23 @@ async def process_chat_message(message: types.Message, bot: Bot):
                 if is_virt
                 else ""
             )
-            await message.answer(
+            chat_text = (
                 f"🚨 <b>{user_name}</b> исчерпал все очки (0) и отправлен в мут на <b>{config.zero_points_mute_hours} {zero_word}</b> за нецензурную брань!{admin_note}\n"
-                f"Очки восстановлены до {config.initial_points}.",
-                parse_mode=ParseMode.HTML,
+                f"Очки восстановлены до {config.initial_points}."
             )
         else:
-            await message.answer(
+            chat_text = (
                 f"⚠️ <b>{user_name}</b>, не выражайся! В чате действует цензура.\n"
-                f"Штраф: <b>-{config.mat_penalty} очко</b>. Осталось очков: <b>{new_points}</b>.",
-                parse_mode=ParseMode.HTML,
+                f"Штраф: <b>-{config.mat_penalty} очко</b>. Осталось очков: <b>{new_points}</b> (из {config.max_points})."
             )
+
+        await send_chat_violation_announcement(
+            bot=bot,
+            chat_id=chat_id,
+            text=chat_text,
+            photo_bytes=photo_bytes,
+            filename=f"proof_{v_id}.png",
+        )
         return
 
     # 4. ЧИСТОЕ СООБЩЕНИЕ БЕЗ МАТА (НАЧИСЛЕНИЕ +1 БАЛЛА ЗА КАЖДЫЕ 25 СООБЩЕНИЙ)

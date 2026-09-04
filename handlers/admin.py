@@ -406,10 +406,6 @@ async def cmd_proof(message: types.Message, bot: Bot):
     • /proof 12 — скриншот конкретного нарушения по номеру (ID)
     • Ответом на сообщение нарушителя: /proof
     """
-    if not await is_admin(message, bot):
-        await message.reply("⛔ Просмотр доказательств доступен только администраторам.")
-        return
-
     parts = message.text.split()
     # 1. Если указан конкретный номер нарушения: /proof 15
     if len(parts) > 1 and parts[1].isdigit():
