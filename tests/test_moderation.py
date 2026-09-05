@@ -295,6 +295,12 @@ def test_sticker_detection():
     is_viol, v_type, r = check_sticker_image_colors(buf_safe.getvalue())
     assert is_viol == False
 
+    # 5. Проверка нормализации стикера в JPEG (на белом фоне)
+    from filters.sticker_filter import normalize_sticker_to_jpeg
+    jpeg_bytes = normalize_sticker_to_jpeg(buf_safe.getvalue())
+    assert jpeg_bytes is not None and len(jpeg_bytes) > 100
+    assert jpeg_bytes[:2] == b"\xff\xd8", "Должен быть валидный заголовок JPEG"
+
     print("✅ Тест сканирования стикеров (нацизм, свастика, пошлость) успешно пройден!")
 
 

@@ -163,6 +163,36 @@ async def get_sticker_pack_title(bot: Bot, set_name: Optional[str]) -> Optional[
     return None
 
 
+def normalize_sticker_to_jpeg(raw_bytes: bytes) -> Optional[bytes]:
+    """Конвертирует стикер любого формата (WebP/PNG/RGBA) в чистый JPEG на белом фоне."""
+    try:
+        img = Image.open(io.BytesIO(raw_bytes))
+        if img.mode in ("RGBA", "LA", "P"):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "P":
+                img = img.convert("RGBA")
+            if "A" in img.getbands():
+                bg.paste(img, mask=img.split()[-1])
+            else:
+                bg.paste(img)
+            img = bg
+        else:
+            img = img.convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=85)
+        return out.getvalue()
+    except Exception:
+        return None
+
+
+# Быстрые и стабильные Vision модели Gemini по приоритету
+VISION_MODELS = [
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest",
+]
+
+
 async def scan_sticker_violation(
     bot: Bot,
     sticker: types.Sticker,
@@ -183,12 +213,25 @@ async def scan_sticker_violation(
 
     # 3. Скачиваем байты стикера для визуального анализа (и для скриншота доказательств!)
     sticker_bytes: Optional[bytes] = None
+    # Для анимированных (.tgs) и видео (.webm) стикеров берем статичный thumbnail!
+    file_id_to_fetch = sticker.file_id
+    if (sticker.is_animated or sticker.is_video) and sticker.thumbnail:
+        file_id_to_fetch = sticker.thumbnail.file_id
+
     try:
-        file_info = await bot.get_file(sticker.file_id)
+        file_info = await bot.get_file(file_id_to_fetch)
         if file_info.file_path:
-            downloaded = await bot.download_file(file_info.file_path)
-            if downloaded:
-                sticker_bytes = downloaded.read()
+            # Если файл .tgs или .webm, а у стикера есть thumbnail — переключаемся на thumbnail
+            if file_info.file_path.endswith((".tgs", ".webm")) and sticker.thumbnail:
+                thumb_info = await bot.get_file(sticker.thumbnail.file_id)
+                if thumb_info.file_path:
+                    downloaded = await bot.download_file(thumb_info.file_path)
+                    if downloaded:
+                        sticker_bytes = downloaded.read()
+            else:
+                downloaded = await bot.download_file(file_info.file_path)
+                if downloaded:
+                    sticker_bytes = downloaded.read()
     except Exception as e:
         print(f"[WARN] Не удалось скачать стикер для анализа: {e}")
 
@@ -196,7 +239,7 @@ async def scan_sticker_violation(
     if viol:
         return True, v_type, reason, sticker_bytes
 
-    # 4. Визуальный анализ через Pillow (если стикер скачан и статичен/webp)
+    # 4. Визуальный анализ через Pillow (цветовая палитра рейха и skin-tone ratio)
     if sticker_bytes:
         img_viol, img_type, img_reason = check_sticker_image_colors(sticker_bytes)
         if img_viol:
@@ -212,48 +255,84 @@ async def scan_sticker_violation(
 
 
 async def _check_with_gemini_vision(image_bytes: bytes, api_key: str) -> Tuple[bool, Optional[str], Optional[str]]:
-    """Проверка через Gemini Vision API (если задан GEMINI_API_KEY)."""
+    """
+    Проверка стикера через Gemini Vision API.
+    Использует нормализацию изображения (JPEG на белом фоне) и каскад моделей.
+    """
     try:
         import base64
         import aiohttp
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={api_key}"
-        b64_img = base64.b64encode(image_bytes).decode("utf-8")
+        # Нормализуем изображение к чистому JPEG на белом фоне
+        jpeg_bytes = normalize_sticker_to_jpeg(image_bytes) or image_bytes
+        b64_img = base64.b64encode(jpeg_bytes).decode("utf-8")
+
+        prompt = (
+            "School chat moderation: check if this sticker contains:\n"
+            "1) Nazi/Fascist symbols (swastika, SS runes, Hitler, Third Reich eagle/flag).\n"
+            "2) Vulgar/NSFW/18+ content (nudity, pornography, hentai, sexual acts).\n\n"
+            "Respond ONLY in this exact format:\n"
+            "VIOLATION: NAZI (<details>)\n"
+            "or\n"
+            "VIOLATION: NSFW (<details>)\n"
+            "or\n"
+            "SAFE"
+        )
+
         payload = {
             "contents": [{
                 "parts": [
-                    {
-                        "text": (
-                            "Inspect this Telegram sticker for a school chat. "
-                            "Check if it contains: 1) Nazi/Fascist symbols, swastika, Hitler/Third Reich imagery. "
-                            "2) Vulgar/NSFW/pornographic/hentai/erotic 18+ content. "
-                            "Answer in format: VIOLATION: NAZI (reason) or VIOLATION: NSFW (reason) or SAFE."
-                        )
-                    },
+                    {"text": prompt},
                     {
                         "inline_data": {
-                            "mime_type": "image/webp",
-                            "data": b64_img
+                            "mime_type": "image/jpeg",
+                            "data": b64_img,
                         }
                     }
                 ]
             }]
         }
+
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    answer = (
-                        data.get("candidates", [{}])[0]
-                        .get("content", {})
-                        .get("parts", [{}])[0]
-                        .get("text", "")
-                    )
-                    if "VIOLATION: NAZI" in answer:
-                        return True, "фашизм/свастика", "AI определил нацистскую символику"
-                    if "VIOLATION: NSFW" in answer:
-                        return True, "пошлость/18+", "AI определил пошлый/18+ контент"
+            for model_name in VISION_MODELS:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                try:
+                    async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            candidates = data.get("candidates", [])
+                            if not candidates:
+                                continue
+
+                            cand = candidates[0]
+                            finish_reason = cand.get("finishReason", "")
+
+                            # Если сработал фильтр безопасности самого Google на экстремизм/порнографию
+                            if finish_reason == "SAFETY":
+                                return True, "фашизм/свастика", "AI заблокировал изображение политикой безопасности (экстремизм/насилие)"
+
+                            parts = cand.get("content", {}).get("parts", [])
+                            if not parts:
+                                continue
+
+                            answer = parts[0].get("text", "").strip()
+                            ans_upper = answer.upper()
+
+                            if any(k in ans_upper for k in ["VIOLATION: NAZI", "NAZI", "SWASTIKA", "СВАСТИК", "ФАШИЗМ", "HITLER", "ГИТЛЕР", "REICH", "РЕЙХ"]):
+                                return True, "фашизм/свастика", "нейросеть распознала нацистскую символику/свастику"
+                            if any(k in ans_upper for k in ["VIOLATION: NSFW", "NSFW", "PORN", "ПОРНО", "HENTAI", "ХЕНТАЙ", "EROTIC", "ЭРОТИК", "NUDE", "SEX"]):
+                                return True, "пошлость/18+", "нейросеть распознала 18+/пошлый контент"
+                            if "SAFE" in ans_upper:
+                                return False, None, None
+                        else:
+                            err_body = await resp.text()
+                            print(f"[WARN] Gemini Vision {model_name} status {resp.status}: {err_body[:120]}")
+                except Exception as ex:
+                    print(f"[WARN] Gemini Vision {model_name} ошибка: {ex}")
+                    continue
+
     except Exception as e:
-        print(f"[WARN] Ошибка Gemini Vision для стикера: {e}")
+        print(f"[WARN] Ошибка в модуле Gemini Vision: {e}")
 
     return False, None, None
+
