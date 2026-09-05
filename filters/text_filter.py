@@ -48,16 +48,107 @@ WHITELIST_WORDS = {
     "влюблен", "влюбленный", "влюблена"
 }
 
-# Регулярные выражения для оскорблений (мут на 2 часа)
-INSULT_PATTERNS = [
-    r"\b(ты|вы|он|она|чел|чувак|этот)?\s*(дебил\w*|даун\w*|дура[кч]?\w*|урод\w*|шлюх\w*|тварь\w*|мразь\w*|гной\w*|биомусор|ничтожество)\b",
-    r"\b(чмо|чмошник\w*|чмоня|петух\w*|лошара|лошок|сучар\w*|гнида|шалав\w*|паскуд\w*)\b",
-    r"\b(пид[ао]р\w*|педик\w*|пидорас\w*|пидарас\w*|г[ао]ндон\w*|хуесос\w*|долбо[её]б\w*|у[её]бищ\w*|мудил\w*|мудак\w*|еблан\w*|ёблан\w*)\b",
-    r"\b(пошел|пошёл|иди|пшел|вали)\s+(на\s*хуй|в\s*пизду|в\s*жопу)\b",
-    r"\b(рот\s*закрой|закрой\s*пасть|ебало\s*завали|завали\s*ебало)\b",
-    r"\b(соси\s+хуй|соси\s+член|отсоси|отсоси\s+хуй)\b",
-    r"\bмать\s+(твою|ебал|жива|в\s*канаве)\b",
+# Перечень корней и слов оскорблений
+ALL_INSULT_WORDS = (
+    r'(?:дебил\w*|даун\w*|дура[кч]?\w*|урод\w*|чмо\w*|чмошник\w*|чмоня|петух\w*|'
+    r'лошара|лошок|лох\w*|тупо[йея]|идиот\w*|клоун\w*|ничтожеств\w*|дебилка|дура|придурок|тормоз|'
+    r'сучар\w*|гнида\w*|шалав\w*|паскуд\w*|шлюх\w*|тварь\w*|мразь\w*|гной\w*|биомусор|'
+    r'пид[ао]р\w*|педик\w*|пидорас\w*|пидарас\w*|г[ао]ндон\w*|хуесос\w*|долбо[её]б\w*|'
+    r'у[её]бищ\w*|мудил\w*|мудак\w*|еблан\w*|ёблан\w*)'
+)
+
+# 1. Высказывания о себе / самоирония / самокритика (НЕ является оскорблением участников!)
+SELF_DIRECTED_RE = re.compile(
+    r'(?:'
+    r'\b(?:я|мне|меня|мной|мною|себя|сам|сама)\s+(?:[\w\s]{0,25}\s+)?' + ALL_INSULT_WORDS + r'\b'
+    r'|'
+    r'\b' + ALL_INSULT_WORDS + r'\s+(?:[\w\s]{0,15}\s+)?(?:я|мне|меня|мной|мною)\b'
+    r'|'
+    r'\b(?:не\s+надо\s+меня|не\s+считай(?:те)?\s+меня|не\s+называй(?:те)?\s+меня|не\s+делай(?:те)?\s+из\s+меня|считаю\s+себя|чувствую\s+себя|не\s+презирай(?:те)?\s+меня)\b'
+    r'|'
+    r'\b(?:почему\s+я|потому\s+что\s+я|если\s+я|ну\s+я\s+и|вот\s+я|какой\s+я|какая\s+я|походу\s+я|наверно[е]?\s+я)\s+(?:[\w\s]{0,15}\s+)?' + ALL_INSULT_WORDS + r'\b'
+    r')',
+    re.IGNORECASE
+)
+
+# 2. Отрицание оскорбления (НЕ оскорбление)
+NEGATION_RE = re.compile(
+    r'\b(?:не|нет|ничуть\s+не|вовсе\s+не|ни\s+разу\s+не|никто\s+не|никого\s+не)\s+' + ALL_INSULT_WORDS + r'\b',
+    re.IGNORECASE
+)
+
+# 3. Агрессивные повелительные атаки (всегда оскорбление)
+IMPERATIVE_ATTACKS = [
+    r'\b(?:пошел|пошёл|иди|пшел|вали)\s+(?:на\s*хуй|в\s*пизду|в\s*жопу)\b',
+    r'\b(?:рот\s*закрой|закрой\s*пасть|ебало\s*завали|завали\s*ебало)\b',
+    r'\b(?:соси\s+хуй|соси\s+член|отсоси|отсоси\s+хуй)\b',
+    r'\bмать\s+(?:твою|ебал|жива|в\s*канаве)\b',
 ]
+
+# 4. Адресованные оскорбления (обращенные к другому участнику)
+DIRECTED_INSULT_RE = re.compile(
+    r'(?:'
+    r'\b(?:ты|вы|тебя|тебе|тобой|вас|вам|вами|он|она|чел|чувак|этот|тот|слышь|эй)\s+(?:[\w\s]{0,20}\s+)?' + ALL_INSULT_WORDS + r'\b'
+    r'|'
+    r'\b' + ALL_INSULT_WORDS + r'\s+(?:[\w\s]{0,10}\s+)?(?:ты|вы)\b'
+    r'|'
+    r'@\w+\s+(?:[\w\s]{0,10}\s+)?' + ALL_INSULT_WORDS + r'\b'
+    r'|'
+    r'\b' + ALL_INSULT_WORDS + r'\s+(?:[\w\s]{0,10}\s+)?@\w+'
+    r')',
+    re.IGNORECASE
+)
+
+# 5. Тяжелые ругательства (если не относятся к себе и не отрицаются)
+HEAVY_SLURS_RE = re.compile(
+    r'\b(?:шлюх\w*|шалав\w*|паскуд\w*|гнида\w*|мразь\w*|биомусор|пидорас\w*|пидарас\w*|хуесос\w*)\b',
+    re.IGNORECASE
+)
+
+
+def check_insult(text: str) -> Tuple[bool, Optional[str]]:
+    """
+    Интеллектуальная контекстная проверка на оскорбления участников.
+    Отличает оскорбление собеседника от высказываний о себе / самокритики (например, 'я дебил')
+    и отрицаний ('ты не дебил').
+    """
+    if not text:
+        return False, None
+
+    # 1. Повелительные грубые атаки
+    for pat in IMPERATIVE_ATTACKS:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            return True, m.group(0).strip()
+
+    # 2. Прямые оскорбления, направленные на другого человека ('ты дебил', 'чел ты дурак')
+    for m in DIRECTED_INSULT_RE.finditer(text):
+        snippet = text[max(0, m.start() - 10):m.end()]
+        if not NEGATION_RE.search(snippet):
+            return True, m.group(0).strip()
+
+    # 3. Тяжелые ругательства (если не относятся к себе и не отрицаются)
+    for m in HEAVY_SLURS_RE.finditer(text):
+        snippet = text[max(0, m.start() - 25):min(len(text), m.end() + 25)]
+        if not SELF_DIRECTED_RE.search(snippet) and not NEGATION_RE.search(snippet):
+            return True, m.group(0).strip()
+
+    # 4. Общие слова обзывательств (дебил, даун, дурак, урод, чмо, лох)
+    for m in re.finditer(r'\b' + ALL_INSULT_WORDS + r'\b', text, re.IGNORECASE):
+        matched_str = m.group(0).strip()
+        if matched_str.lower() in WHITELIST_WORDS:
+            continue
+        snippet = text[max(0, m.start() - 30):min(len(text), m.end() + 30)]
+        # Если относится к себе ('я дебил', 'не надо меня презирать я дебил') -> пропускаем
+        if SELF_DIRECTED_RE.search(snippet):
+            continue
+        # Если отрицание ('не дебил', 'не дурак') -> пропускаем
+        if NEGATION_RE.search(snippet):
+            continue
+        return True, matched_str
+
+    return False, None
+
 
 # Полный перечень регулярных выражений для мата (-1 очко)
 MAT_PATTERNS = [
@@ -141,14 +232,14 @@ def remove_spacing_and_symbols_tricks(text: str) -> str:
             # Пропускаем его, он не должен разрывать цепочку одиночных букв
             continue
         else:
-            if len(single_letters_buffer) >= 2:
+            if len(single_letters_buffer) >= 3:
                 reconstructed.append("".join(single_letters_buffer))
             else:
                 reconstructed.extend(single_letters_buffer)
             single_letters_buffer = []
             reconstructed.append(word)
 
-    if len(single_letters_buffer) >= 2:
+    if len(single_letters_buffer) >= 3:
         reconstructed.append("".join(single_letters_buffer))
     elif single_letters_buffer:
         reconstructed.extend(single_letters_buffer)
@@ -180,14 +271,11 @@ def check_text_violation(text: str) -> Tuple[ViolationType, Optional[str]]:
 
     variants = [condensed, trans_condensed, norm]
 
-    # 1. Проверка на оскорбления
+    # 1. Проверка на оскорбления (с учетом контекста ситуации и самокритики)
     for variant in variants:
-        for pattern in INSULT_PATTERNS:
-            match = re.search(pattern, variant, re.IGNORECASE)
-            if match:
-                word = match.group(0).strip()
-                if word not in WHITELIST_WORDS:
-                    return ViolationType.INSULT, word
+        is_insult, insult_word = check_insult(variant)
+        if is_insult:
+            return ViolationType.INSULT, insult_word
 
     # 2. Проверка на мат
     for variant in variants:

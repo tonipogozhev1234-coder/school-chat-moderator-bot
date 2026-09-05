@@ -56,6 +56,9 @@ class Config:
     spam_penalty: int = field(
         default_factory=lambda: int(os.getenv("SPAM_PENALTY", "1"))
     )
+    sticker_penalty: int = field(
+        default_factory=lambda: int(os.getenv("STICKER_PENALTY", "1"))
+    )
     insult_mute_hours: int = field(
         default_factory=lambda: int(os.getenv("INSULT_MUTE_HOURS", "2"))
     )
@@ -64,6 +67,9 @@ class Config:
     )
     delete_violating_messages: bool = field(
         default_factory=lambda: os.getenv("DELETE_VIOLATING_MESSAGES", "True").lower() in ("true", "1", "yes")
+    )
+    gemini_api_key: str = field(
+        default_factory=lambda: os.getenv("GEMINI_API_KEY", "").strip()
     )
     clean_messages_reward_step: int = field(
         default_factory=lambda: int(os.getenv("CLEAN_MESSAGES_REWARD_STEP", "25"))

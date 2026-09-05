@@ -20,6 +20,7 @@ from config import config
 from database import db
 from filters.text_filter import check_text_violation, ViolationType
 from filters.spam_detector import spam_detector
+from filters.sticker_filter import scan_sticker_violation
 from utils.screenshot import create_single_message_screenshot, fetch_user_avatar_bytes
 
 router = Router()
@@ -192,6 +193,160 @@ async def apply_mute(
         return False, True
 
 
+async def process_sticker_message(message: types.Message, bot: Bot):
+    """
+    Проверка отправленного стикера на пошлость (18+) и нацистскую/фашистскую символику.
+    При нарушении снимает очки (config.sticker_penalty), удаляет стикер и отправляет доказательства.
+    """
+    is_private = (message.chat.type == "private")
+    chat_id = message.chat.id
+    user = message.from_user
+    if not user:
+        return
+    user_id = user.id
+    user_name = user.first_name or user.username or f"ID_{user_id}"
+
+    is_viol, v_category, reason, sticker_bytes = await scan_sticker_violation(
+        bot=bot,
+        sticker=message.sticker,
+        gemini_api_key=config.gemini_api_key,
+    )
+
+    if not is_viol:
+        # Стикер без нарушений -> засчитываем как чистое сообщение в группе
+        if not is_private:
+            is_rewarded, new_points, clean_count = await db.record_clean_message(
+                chat_id=chat_id,
+                user_id=user_id,
+                reward_step=config.clean_messages_reward_step,
+                reward_points=config.clean_messages_reward_points,
+                max_points=config.max_points,
+            )
+            if is_rewarded:
+                if new_points >= config.max_points:
+                    msg_text = (
+                        f"🎉 <b>{user_name}</b>, вы отправили <b>{config.clean_messages_reward_step} сообщений без нарушений</b>!\n"
+                        f"⭐ Ваш баланс на максимуме: <b>{config.max_points} очков</b>!"
+                    )
+                else:
+                    msg_text = (
+                        f"🎉 <b>{user_name}</b>, вы отправили <b>{config.clean_messages_reward_step} сообщений без нарушений</b>!\n"
+                        f"⭐ Вам начислен <b>+{config.clean_messages_reward_points} балл вежливости</b>! Текущие очки: <b>{new_points}</b> (из {config.max_points})."
+                    )
+                await message.answer(msg_text, parse_mode=ParseMode.HTML)
+        return
+
+    # Зафиксировано нарушение по стикеру! Снимаем очки (-sticker_penalty)
+    new_points = await db.deduct_points(chat_id, user_id, config.sticker_penalty)
+    v_id = await db.record_violation(
+        chat_id=chat_id,
+        user_id=user_id,
+        violation_type=f"стикер ({v_category})",
+        details=reason or "запрещённый стикер",
+        points_deducted=config.sticker_penalty,
+        full_text=f"[Стикер: {message.sticker.set_name or 'custom'} {message.sticker.emoji or ''}]",
+        username=user.username,
+        first_name=user.first_name,
+        chat_title=message.chat.title or "Классный чат",
+        matched_word=reason or "стикер",
+    )
+
+    if is_private:
+        if new_points <= 0:
+            await db.reset_points(chat_id, user_id)
+            await message.reply(
+                f"🚨 <b>{user_name}</b>, вы исчерпали все очки (0) за запрещённый стикер ({reason})!\n"
+                f"В группе вы бы отправились в мут на <b>{config.zero_points_mute_hours} часа</b>. Очки восстановлены до {config.initial_points}.",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await message.reply(
+                f"⚠️ <b>{user_name}</b>, запрещены пошлые стикеры и нацистская символика ({reason})!\n"
+                f"Штраф: <b>-{config.sticker_penalty} очко</b>. Осталось очков: <b>{new_points}</b> (из {config.max_points}).",
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    # Подготовка фото-доказательства
+    proof_bytes = sticker_bytes
+    if not proof_bytes:
+        time_str = message.date.strftime("%H:%M") if message.date else datetime.now().strftime("%H:%M")
+        avatar_bytes = await fetch_user_avatar_bytes(bot, user_id)
+        img_buf = create_single_message_screenshot(
+            user_name=user_name,
+            user_id=user_id,
+            text=f"[Стикер: {message.sticker.set_name or ''} {message.sticker.emoji or ''}]",
+            time_str=time_str,
+            avatar_bytes=avatar_bytes,
+        )
+        proof_bytes = img_buf.read() if img_buf else None
+
+    # Рассылаем администраторам в ЛС
+    target_admin_ids = set()
+    if config.report_user_id:
+        target_admin_ids.add(config.report_user_id)
+    for aid in config.admin_ids:
+        if aid:
+            target_admin_ids.add(aid)
+
+    admin_caption = (
+        f"📸 <b>Скриншот-доказательство: запрещённый стикер #{v_id}</b>\n\n"
+        f"🏫 <b>Чат:</b> {html.escape(message.chat.title or 'Классный чат')}\n"
+        f"👤 <b>Нарушитель:</b> {html.escape(user_name)} (ID: <code>{user_id}</code>)\n"
+        f"⚠️ <b>Категория:</b> {v_category.upper()}\n"
+        f"🔍 <b>Причина:</b> <code>{html.escape(reason or '')}</code>\n"
+        f"📊 <b>Осталось очков:</b> <code>{new_points}</code> (из {config.max_points})"
+    )
+    for aid in target_admin_ids:
+        try:
+            if proof_bytes:
+                photo = BufferedInputFile(proof_bytes, filename=f"proof_sticker_{v_id}.png")
+                await bot.send_photo(chat_id=aid, photo=photo, caption=admin_caption, parse_mode=ParseMode.HTML)
+            else:
+                await bot.send_message(chat_id=aid, text=admin_caption, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            print(f"[ERROR] Не удалось отправить отчет по стикеру админу {aid}: {e}")
+
+    # В группе: удаляем стикер
+    if config.delete_violating_messages:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+    if new_points <= 0:
+        is_tg, is_virt = await apply_mute(
+            bot=bot,
+            chat_id=chat_id,
+            user_id=user_id,
+            duration_hours=config.zero_points_mute_hours,
+        )
+        await db.reset_points(chat_id, user_id)
+        zero_word = "часа" if config.zero_points_mute_hours in (2, 3, 4) else "часов"
+        admin_note = (
+            f"\n<i>(Для участников с правами админа активен режим автоудаления сообщений на {config.zero_points_mute_hours} {zero_word})</i>"
+            if is_virt
+            else ""
+        )
+        chat_text = (
+            f"🚨 <b>{user_name}</b> исчерпал все очки (0) и отправлен в мут на <b>{config.zero_points_mute_hours} {zero_word}</b> за запрещённые стикеры ({reason})!{admin_note}\n"
+            f"Очки восстановлены до {config.initial_points}."
+        )
+    else:
+        chat_text = (
+            f"⚠️ <b>{user_name}</b>, в чате запрещены пошлые стикеры и нацистская/фашистская символика ({reason})!\n"
+            f"Штраф: <b>-{config.sticker_penalty} очко</b>. Осталось очков: <b>{new_points}</b> (из {config.max_points})."
+        )
+
+    await send_chat_violation_announcement(
+        bot=bot,
+        chat_id=chat_id,
+        text=chat_text,
+        photo_bytes=proof_bytes,
+        filename=f"proof_sticker_{v_id}.png",
+    )
+
+
 @router.message()
 async def process_chat_message(message: types.Message, bot: Bot):
     """Главный фильтр сообщений чата."""
@@ -216,11 +371,6 @@ async def process_chat_message(message: types.Message, bot: Bot):
                 pass
             return
 
-    # Игнорируем команды (они обрабатываются в роутерах команд)
-    text = message.text or message.caption or ""
-    if text.startswith("/"):
-        return
-
     # Регистрируем/обновляем пользователя в базе данных
     await db.get_or_create_user(
         chat_id=chat_id,
@@ -228,6 +378,16 @@ async def process_chat_message(message: types.Message, bot: Bot):
         username=user.username,
         first_name=user.first_name,
     )
+
+    # Проверка стикеров на нацизм/фашизм и пошлость/18+
+    if message.sticker:
+        await process_sticker_message(message, bot)
+        return
+
+    # Игнорируем команды (они обрабатываются в роутерах команд)
+    text = message.text or message.caption or ""
+    if text.startswith("/"):
+        return
 
     # 1. ПРОВЕРКА НА ОСКОРБЛЕНИЯ (Высший приоритет -> Мут на 2 часа)
     violation, matched = check_text_violation(text)

@@ -83,7 +83,24 @@ def test_insult_detection():
     for phrase in insult_phrases:
         v_type, matched = check_text_violation(phrase)
         assert v_type == ViolationType.INSULT, f"Оскорбление не распознано: '{phrase}' (получено: {v_type})"
-    print("✅ Тест обнаружения оскорблений успешно пройден!")
+
+    # Проверка ситуаций с самокритикой и невинными фразами (НЕ должно быть мута!)
+    safe_phrases = [
+        "если это не так не надо меня презирать я дебил",
+        "я дебил",
+        "ну я и дурак конечно",
+        "какой я лох",
+        "я даун походу",
+        "я тупой",
+        "не считай меня дебилом",
+        "ты не дебил",
+        "я не дурак",
+    ]
+    for phrase in safe_phrases:
+        v_type, matched = check_text_violation(phrase)
+        assert v_type == ViolationType.NONE, f"Ложный мут за высказывание о себе: '{phrase}' (получено: {v_type})"
+
+    print("✅ Тест обнаружения оскорблений и защиты от ложных мутов успешно пройден!")
 
 
 def test_spam_detection():
@@ -241,6 +258,46 @@ def test_screenshot():
     print("✅ Тест чистого скриншота сообщения успешно пройден!")
 
 
+def test_sticker_detection():
+    """Тест сканирования стикеров на нацистскую символику, свастику и пошлость/18+."""
+    from filters.sticker_filter import check_sticker_metadata, check_sticker_image_colors
+    from PIL import Image, ImageDraw
+    import io
+
+    # 1. Проверка метаданных
+    assert check_sticker_metadata("nazi_reich_pack", "Стикеры Рейха", None)[0] == True
+    assert check_sticker_metadata("hitler_pack", "Гитлер", None)[0] == True
+    assert check_sticker_metadata("custom_pack", "Обычный пак", "卐")[0] == True
+    assert check_sticker_metadata("hentai_18", "18+ Хентай", None)[0] == True
+    assert check_sticker_metadata("cute_cats", "Котики для школы", "🐱")[0] == False
+
+    # 2. Проверка цветовой сигнатуры нацистского флага/свастики
+    img_nazi = Image.new("RGBA", (100, 100), (200, 20, 20, 255))
+    draw = ImageDraw.Draw(img_nazi)
+    draw.ellipse((25, 25, 75, 75), fill=(255, 255, 255, 255))
+    draw.rectangle((45, 35, 55, 65), fill=(0, 0, 0, 255))
+    buf = io.BytesIO()
+    img_nazi.save(buf, format="PNG")
+    is_viol, v_type, r = check_sticker_image_colors(buf.getvalue())
+    assert is_viol == True and v_type == "фашизм/свастика"
+
+    # 3. Проверка детекции пошлых стикеров с чрезмерным обнажением (>50% кожи)
+    img_skin = Image.new("RGBA", (100, 100), (220, 160, 120, 255))
+    buf_skin = io.BytesIO()
+    img_skin.save(buf_skin, format="PNG")
+    is_viol, v_type, r = check_sticker_image_colors(buf_skin.getvalue())
+    assert is_viol == True and v_type == "пошлость/18+"
+
+    # 4. Проверка безопасного стикера
+    img_safe = Image.new("RGBA", (100, 100), (50, 120, 220, 255))
+    buf_safe = io.BytesIO()
+    img_safe.save(buf_safe, format="PNG")
+    is_viol, v_type, r = check_sticker_image_colors(buf_safe.getvalue())
+    assert is_viol == False
+
+    print("✅ Тест сканирования стикеров (нацизм, свастика, пошлость) успешно пройден!")
+
+
 if __name__ == "__main__":
     print("--- Запуск тестов школьного бота-модератора ---")
     test_clean_messages()
@@ -249,4 +306,5 @@ if __name__ == "__main__":
     test_spam_detection()
     test_database()
     test_screenshot()
+    test_sticker_detection()
     print("\n🎉 ВСЕ ТЕСТЫ УСПЕШНО ПРОЙДЕНЫ!")
