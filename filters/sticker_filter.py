@@ -217,7 +217,7 @@ async def _check_with_gemini_vision(image_bytes: bytes, api_key: str) -> Tuple[b
         import base64
         import aiohttp
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={api_key}"
         b64_img = base64.b64encode(image_bytes).decode("utf-8")
         payload = {
             "contents": [{
