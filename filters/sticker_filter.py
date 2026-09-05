@@ -235,21 +235,29 @@ async def scan_sticker_violation(
     except Exception as e:
         print(f"[WARN] Не удалось скачать стикер для анализа: {e}")
 
+    print(f"[STICKER] Сканирование: pack={set_name}, emoji={emoji}, has_gemini={bool(gemini_api_key)}")
+
     # Если нарушение уже найдено по метаданным
     if viol:
+        print(f"[STICKER] Обнаружено нарушение по метаданным: {reason}")
         return True, v_type, reason, sticker_bytes
 
     # 4. Визуальный анализ через Pillow (цветовая палитра рейха и skin-tone ratio)
     if sticker_bytes:
         img_viol, img_type, img_reason = check_sticker_image_colors(sticker_bytes)
         if img_viol:
+            print(f"[STICKER] Обнаружено нарушение через Pillow: {img_reason}")
             return True, img_type, img_reason, sticker_bytes
 
     # 5. Опциональный AI Vision анализ через Gemini при наличии ключа
     if gemini_api_key and sticker_bytes:
+        print("[STICKER] Запуск Gemini Vision...")
         ai_viol, ai_type, ai_reason = await _check_with_gemini_vision(sticker_bytes, gemini_api_key)
         if ai_viol:
+            print(f"[STICKER] AI обнаружил нарушение: {ai_reason}")
             return True, ai_type, ai_reason, sticker_bytes
+    elif not gemini_api_key:
+        print("[STICKER] Пропуск AI Vision: GEMINI_API_KEY не установлен на хостинге!")
 
     return False, None, None, sticker_bytes
 

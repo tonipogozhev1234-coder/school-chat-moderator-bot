@@ -34,6 +34,9 @@ async def main():
     logger.info("Инициализация базы данных SQLite...")
     await db.init_db()
 
+    gemini_status = f"✅ УСТАНОВЛЕН (длина {len(config.gemini_api_key)})" if config.gemini_api_key else "❌ НЕ УСТАНОВЛЕН (пусто)"
+    logger.info(f"Статус GEMINI_API_KEY: {gemini_status}")
+
     # Инициализация бота
     bot = Bot(
         token=config.bot_token,
