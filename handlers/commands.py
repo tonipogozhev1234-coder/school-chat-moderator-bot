@@ -114,3 +114,55 @@ async def cmd_top(message: types.Message):
         lines.append(f"{medal} <b>{name_clean}</b> — <code>{u['points']}</code> очков (мутов: {u['mutes_count']})")
 
     await message.reply("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+@router.message(Command("status", "статус", "check", "диагностика"))
+async def cmd_status(message: types.Message, bot: Bot):
+    """Диагностика работоспособности бота, прав в чате и подключения к Gemini Vision API."""
+    import time
+    import aiohttp
+
+    lines = ["🤖 <b>Диагностика бота-модератора:</b>\n"]
+    lines.append("🟢 <b>Статус бота:</b> Активен и на связи")
+
+    # 1. Проверка Gemini API
+    if not config.gemini_api_key:
+        lines.append("🔴 <b>Gemini Vision API:</b> Ключ не задан в переменных окружения на хостинге!")
+    else:
+        try:
+            t0 = time.time()
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key={config.gemini_api_key}"
+            payload = {"contents": [{"parts": [{"text": "ping"}]}]}
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                    latency = round(time.time() - t0, 2)
+                    if resp.status == 200:
+                        lines.append(f"🟢 <b>Gemini Vision API:</b> Подключен и работает ({latency} сек)")
+                    else:
+                        lines.append(f"🟡 <b>Gemini Vision API:</b> Ошибка {resp.status} от Google")
+        except Exception as e:
+            lines.append(f"🔴 <b>Gemini Vision API:</b> Ошибка подключения ({e})")
+
+    # 2. Проверка статуса в чате
+    if message.chat.type == "private":
+        lines.append("💬 <b>Тип чата:</b> Личные сообщения с ботом")
+    else:
+        try:
+            bot_member = await bot.get_chat_member(message.chat.id, bot.id)
+            is_adm = bot_member.status in ("administrator", "creator")
+            if is_adm:
+                can_del = getattr(bot_member, "can_delete_messages", False)
+                can_res = getattr(bot_member, "can_restrict_members", False)
+                del_icon = "🟢" if can_del else "🔴"
+                res_icon = "🟢" if can_res else "🔴"
+                lines.append("👮 <b>Статус в группе:</b> Администратор")
+                lines.append(f"{del_icon} Удаление сообщений: {'Разрешено' if can_del else 'Запрещено'}")
+                lines.append(f"{res_icon} Ограничение участников: {'Разрешено' if can_res else 'Запрещено'}")
+            else:
+                lines.append("⚠️ <b>ВНИМАНИЕ: Бот НЕ администратор в этой группе!</b>")
+                lines.append("<i>Без прав администратора Telegram скрывает от бота обычные сообщения и стикеры! Назначьте бота администратором группы.</i>")
+        except Exception as e:
+            lines.append(f"⚠️ Не удалось определить статус в группе: {e}")
+
+    await message.reply("\n".join(lines), parse_mode=ParseMode.HTML)
+
